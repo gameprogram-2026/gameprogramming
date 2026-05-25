@@ -1,0 +1,243 @@
+{
+  "items": [
+    {
+      "id": 1,
+      "key": "scrap_pipe",
+      "name": "고철 파이프",
+      "category": "Weapon",
+      "grade": "normal",
+      "damage": 15,
+      "noiseRadius": 0,
+      "noiseCategory": "Silent",
+      "durability": 20,
+      "weight": 1.5,
+      "melee": true,
+      "special": "none",
+      "description": "기본 근접무기. 어디서나 드랍"
+    },
+    {
+      "id": 2,
+      "key": "nail_bat",
+      "name": "못 박은 배트",
+      "category": "Weapon",
+      "grade": "enhanced",
+      "damage": 30,
+      "noiseRadius": 64,
+      "noiseCategory": "Soft",
+      "durability": 15,
+      "weight": 2.0,
+      "melee": true,
+      "special": "bleed",
+      "description": "명중 시 출혈 효과 부여"
+    },
+    {
+      "id": 3,
+      "key": "fire_axe",
+      "name": "소방 도끼",
+      "category": "Weapon",
+      "grade": "enhanced",
+      "damage": 45,
+      "noiseRadius": 160,
+      "noiseCategory": "Soft",
+      "durability": 12,
+      "weight": 3.0,
+      "melee": true,
+      "special": "break_structure",
+      "description": "문·바리케이드 파괴 가능"
+    },
+    {
+      "id": 4,
+      "key": "pistol_9mm",
+      "name": "권총 (9mm)",
+      "category": "Weapon",
+      "grade": "rare",
+      "damage": 60,
+      "noiseRadius": 960,
+      "noiseCategory": "Loud",
+      "magSize": 7,
+      "weight": 1.0,
+      "melee": false,
+      "ammoKey": "ammo_9mm",
+      "special": "zombie_aggro_all",
+      "description": "발사 시 전 좀비 어그로. 장탄 7발"
+    },
+    {
+      "id": 5,
+      "key": "molotov",
+      "name": "소주병 화염병",
+      "category": "Throwable",
+      "grade": "normal",
+      "damagePerSec": 20,
+      "noiseRadius": 256,
+      "noiseCategory": "Soft",
+      "weight": 0.5,
+      "quantity": 1,
+      "special": "fire_spread",
+      "fireSpreadRadius": 3,
+      "description": "투척 후 화염 전파 유발. 지역 차단 전략"
+    },
+    {
+      "id": 6,
+      "key": "flamethrower",
+      "name": "사제 화염방사기",
+      "category": "Weapon",
+      "grade": "unique",
+      "damagePerSec": 25,
+      "noiseRadius": 480,
+      "noiseCategory": "Soft",
+      "fuelLimit": 60,
+      "weight": 5.0,
+      "melee": false,
+      "special": "fire_spread",
+      "spawnRate": "very_rare",
+      "description": "범위 화염. 판당 맵에 1~2개만 스폰"
+    },
+    {
+      "id": 10,
+      "key": "ammo_9mm",
+      "name": "9mm 탄약",
+      "category": "Ammo",
+      "grade": "normal",
+      "quantity": 30,
+      "weight": 0.3,
+      "icon": "sprites/items/ammo_9mm.png"
+    },
+    {
+      "id": 20,
+      "key": "scrap_metal",
+      "name": "고철",
+      "category": "BuildMaterial",
+      "grade": "normal",
+      "weight": 1.0,
+      "description": "바리케이드, 포탑 재료"
+    },
+    {
+      "id": 21,
+      "key": "plank",
+      "name": "판자",
+      "category": "BuildMaterial",
+      "grade": "normal",
+      "weight": 0.8,
+      "description": "바리케이드 재료"
+    },
+    {
+      "id": 22,
+      "key": "electronic_part",
+      "name": "전자 부품",
+      "category": "BuildMaterial",
+      "grade": "rare",
+      "weight": 0.5,
+      "description": "포탑 제작 재료"
+    },
+    {
+      "id": 23,
+      "key": "oil",
+      "name": "기름",
+      "category": "BuildMaterial",
+      "grade": "normal",
+      "weight": 1.2,
+      "description": "포탑·화염방사기 연료"
+    },
+    {
+      "id": 24,
+      "key": "wood",
+      "name": "나무",
+      "category": "BuildMaterial",
+      "grade": "normal",
+      "weight": 0.7,
+      "description": "가시트랩 재료"
+    },
+    {
+      "id": 30,
+      "key": "medkit",
+      "name": "구급 상자",
+      "category": "Consumable",
+      "grade": "rare",
+      "healAmount": 50,
+      "useTime": 3.0,
+      "weight": 1.0,
+      "description": "HP 50 회복"
+    },
+    {
+      "id": 31,
+      "key": "bandage",
+      "name": "붕대",
+      "category": "Consumable",
+      "grade": "normal",
+      "healAmount": 20,
+      "useTime": 2.0,
+      "special": "stop_bleed",
+      "weight": 0.3,
+      "description": "HP 20 회복 + 출혈 중지"
+    },
+    {
+      "id": 32,
+      "key": "food_can",
+      "name": "통조림",
+      "category": "Consumable",
+      "grade": "normal",
+      "healAmount": 10,
+      "weight": 0.4,
+      "description": "HP 10 소폭 회복"
+    }
+  ],
+  "crafting_recipes": [
+    {
+      "result": "barricade",
+      "description": "바리케이드 — HP 150, 좀비 3~5회 저지",
+      "build_time": 3.0,
+      "ingredients": [
+        {"key": "scrap_metal", "qty": 2},
+        {"key": "plank",       "qty": 2}
+      ]
+    },
+    {
+      "result": "spike_trap",
+      "description": "가시 트랩 — 밟으면 출혈 부여",
+      "build_time": 2.5,
+      "ingredients": [
+        {"key": "scrap_metal", "qty": 3},
+        {"key": "wood",        "qty": 1}
+      ]
+    },
+    {
+      "result": "turret",
+      "description": "사제 포탑 — 반경 5m 자동 공격. 화염 접촉 시 폭발",
+      "build_time": 6.0,
+      "ingredients": [
+        {"key": "electronic_part", "qty": 2},
+        {"key": "oil",             "qty": 2},
+        {"key": "scrap_metal",     "qty": 3}
+      ]
+    },
+    {
+      "result": "smoke_canister",
+      "description": "연막 캐니스터 — 반경 4m 시야 차단",
+      "build_time": 2.0,
+      "ingredients": [
+        {"key": "oil",        "qty": 1},
+        {"key": "scrap_metal","qty": 1}
+      ]
+    }
+  ],
+  "zone_loot": {
+    "A_residential": {
+      "comment": "구역A 주거지역 — 낮은 밀도, 초반 파밍",
+      "zombie_density": "low",
+      "zombie_types": ["shambler"],
+      "loot_pool": ["scrap_pipe", "bandage", "plank", "food_can", "wood"]
+    },
+    "B_mall": {
+      "comment": "구역B 쇼핑몰 폐허 — 중간 밀도",
+      "zombie_density": "medium",
+      "zombie_types": ["shambler", "runner"],
+      "loot_pool": ["nail_bat", "bandage", "medkit", "ammo_9mm", "food_can", "plank", "scrap_metal"]
+    },
+    "C_industrial": {
+      "comment": "구역C 산업단지 — 높은 밀도, 포탑 재료 주산지",
+      "zombie_density": "high",
+      "zombie_types": ["shambler", "runner", "brute"],
+      "loot_pool": ["fire_axe", "electronic_part", "oil", "scrap_metal", "molotov", "ammo_9mm", "pistol_9mm"]
+    }
+  }
+}

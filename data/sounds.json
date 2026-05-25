@@ -1,0 +1,28 @@
+{
+  "sounds": [
+    { "key": "footstep_gravel_walk",  "path": "sounds/footstep_gravel_walk.wav",  "noiseRadius": 80,  "noiseCategory": "Soft"     },
+    { "key": "footstep_gravel_sprint","path": "sounds/footstep_gravel_sprint.wav","noiseRadius": 200, "noiseCategory": "Moderate" },
+    { "key": "footstep_wood_walk",    "path": "sounds/footstep_wood_walk.wav",    "noiseRadius": 100, "noiseCategory": "Soft"     },
+    { "key": "gunshot_pistol",        "path": "sounds/gunshot_pistol.wav",        "noiseRadius": 500, "noiseCategory": "Loud"     },
+    { "key": "gunshot_rifle",         "path": "sounds/gunshot_rifle.wav",         "noiseRadius": 650, "noiseCategory": "Loud"     },
+    { "key": "gunshot_suppressed",    "path": "sounds/gunshot_suppressed.wav",    "noiseRadius": 150, "noiseCategory": "Moderate" },
+    { "key": "reload_pistol",         "path": "sounds/reload_pistol.wav",         "noiseRadius": 40,  "noiseCategory": "Soft"     },
+    { "key": "reload_rifle",          "path": "sounds/reload_rifle.wav",          "noiseRadius": 50,  "noiseCategory": "Soft"     },
+    { "key": "melee_swing",           "path": "sounds/melee_swing.wav",           "noiseRadius": 60,  "noiseCategory": "Moderate" },
+    { "key": "melee_hit",             "path": "sounds/melee_hit.wav",             "noiseRadius": 80,  "noiseCategory": "Moderate" },
+    { "key": "explosion_grenade",     "path": "sounds/explosion_grenade.wav",     "noiseRadius": 900, "noiseCategory": "Deafening"},
+    { "key": "molotov_ignite",        "path": "sounds/molotov_ignite.wav",        "noiseRadius": 350, "noiseCategory": "Loud"     },
+    { "key": "fire_loop",             "path": "sounds/fire_loop.wav",             "noiseRadius": 200, "noiseCategory": "Loud",    "loop": true },
+    { "key": "turret_explode",        "path": "sounds/turret_explode.wav",        "noiseRadius": 700, "noiseCategory": "Deafening"},
+    { "key": "barricade_build",       "path": "sounds/barricade_build.wav",       "noiseRadius": 300, "noiseCategory": "Loud"     },
+    { "key": "door_open",             "path": "sounds/door_open.wav",             "noiseRadius": 150, "noiseCategory": "Moderate" },
+    { "key": "loot_pickup",           "path": "sounds/loot_pickup.wav",           "noiseRadius": 30,  "noiseCategory": "Silent"   },
+    { "key": "zombie_groan",          "path": "sounds/zombie_groan.wav",          "noiseRadius": 0,   "noiseCategory": "Silent"   },
+    { "key": "zombie_alert",          "path": "sounds/zombie_alert.wav",          "noiseRadius": 0,   "noiseCategory": "Silent"   },
+    { "key": "zombie_frenzy",         "path": "sounds/zombie_frenzy.wav",         "noiseRadius": 0,   "noiseCategory": "Silent"   },
+    { "key": "player_hurt",           "path": "sounds/player_hurt.wav",           "noiseRadius": 120, "noiseCategory": "Moderate" },
+    { "key": "player_death",          "path": "sounds/player_death.wav",          "noiseRadius": 150, "noiseCategory": "Loud"     },
+    { "key": "extraction_ready",      "path": "sounds/extraction_ready.wav",      "noiseRadius": 0,   "noiseCategory": "Silent"   },
+    { "key": "ui_click",              "path": "sounds/ui_click.wav",              "noiseRadius": 0,   "noiseCategory": "Silent"   }
+  ]
+}
