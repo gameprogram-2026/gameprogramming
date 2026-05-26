@@ -66,11 +66,31 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
                                ? ZOMBIE_SIGHT_RADIUS * 1.5f * sightMult
                                : ZOMBIE_SIGHT_RADIUS * sightMult;
                 if (dx*dx + dy*dy < sightR * sightR) {
-                    ai.targetX    = nxf->x;
-                    ai.targetY    = nxf->y;
-                    if (ai.state == ZombieState::Idle || ai.state == ZombieState::Alert) {
-                        ai.state      = ZombieState::Chase;
-                        ai.stateTimer = 0.0f;
+                    // 벽 투시 방지 (Raycast)
+                    bool hasLOS = true;
+                    if (m_map) {
+                        float dist = std::sqrt(dx*dx + dy*dy);
+                        int steps = static_cast<int>(dist / 16.0f); // 16픽셀 단위 레이캐스트
+                        for (int i = 1; i < steps; ++i) {
+                            float t = static_cast<float>(i) / steps;
+                            float cx = xf->x + dx * t;
+                            float cy = xf->y + dy * t;
+                            int tx = static_cast<int>(cx) / 32; // TILE_SIZE=32 가정
+                            int ty = static_cast<int>(cy) / 32;
+                            if (m_map->isSolid(tx, ty)) {
+                                hasLOS = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (hasLOS) {
+                        ai.targetX    = nxf->x;
+                        ai.targetY    = nxf->y;
+                        if (ai.state == ZombieState::Idle || ai.state == ZombieState::Alert) {
+                            ai.state      = ZombieState::Chase;
+                            ai.stateTimer = 0.0f;
+                        }
                     }
                 }
             }
