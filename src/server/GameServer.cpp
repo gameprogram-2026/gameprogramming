@@ -227,11 +227,31 @@ void GameServer::tick(float dt) {
     } else if (!isNight && m_wasNight) {
         m_wasNight = false;
         DZ_LOG_INFO("[Server] Day breaks! Cleaning up excess zombies.");
-        // 낮이 되면 남은 웨이브 좀비들을 정리하여 안전 구역을 확보 (최대 15마리만 유지)
+        // 낮이 되면 야외에 있는 잔여 웨이브 좀비들을 정리하여 안전 구역을 확보 (최대 15마리만 유지)
+        // 건물 내부에 있는 좀비들은 햇빛을 피해 살아남습니다.
         int zCount = 0;
         for (EntityID id : m_world.alive()) {
             Entity e{id};
             if (m_world.tryGet<ZombieAIComponent>(e) && m_world.tryGet<HealthComponent>(e)->isAlive) {
+                bool inBuilding = false;
+                auto* xf = m_world.tryGet<TransformComponent>(e);
+                if (xf) {
+                    int tx = TileMap::worldToTile(xf->x);
+                    int ty = TileMap::worldToTile(xf->y);
+                    for (const auto& bd : m_map.getBuildings()) {
+                        if (tx >= bd.x && tx < bd.x + bd.w && ty >= bd.y && ty < bd.y + bd.h) {
+                            inBuilding = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // 건물 내부 좀비는 살려둠
+                if (inBuilding) {
+                    continue;
+                }
+
+                // 야외 좀비는 15마리까지만 남기고 소멸(햇빛에 녹음)
                 if (zCount > 15) {
                     m_world.destroyEntity(e);
                 } else {
