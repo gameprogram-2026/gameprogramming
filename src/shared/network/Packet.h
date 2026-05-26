@@ -151,6 +151,7 @@ struct DeathEventPacket {
     uint16_t victimID   = 0;
     uint16_t killerID   = 0;
     uint8_t  damageType = 0;
+    char     killerName[16] = {};
 };
 
 struct AlliancePacket {

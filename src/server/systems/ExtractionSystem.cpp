@@ -46,7 +46,7 @@ void ExtractionSystem::update(World& world, float dt, float gameTime) {
             net->role != NetRole::ServerAuth) continue; // skip zombies/buildings
         if (hp->team == Team::Neutral) continue;
 
-        auto& st = stateFor(id);
+        auto& st = stateFor(net->netID);
 
         // ── Death check ────────────────────────────────────────────────────────
         if (!hp->isAlive) {

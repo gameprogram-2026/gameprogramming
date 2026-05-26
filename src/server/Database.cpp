@@ -334,24 +334,31 @@ void Database::saveAccount(const std::string& username,
     mysql_real_escape_string(m_conn, escUser.data(), username.c_str(),
                              static_cast<unsigned long>(username.size()));
 
-    // Begin transaction
-    if (mysql_query(m_conn, "START TRANSACTION") != 0) {
-        DZ_LOG_ERROR("[DB] START TRANSACTION failed: %s", mysql_error(m_conn));
-        return;
-    }
+    struct Transaction {
+        MYSQL* conn;
+        bool committed = false;
+        Transaction(MYSQL* c) : conn(c) { mysql_query(conn, "START TRANSACTION"); }
+        ~Transaction() { 
+            if (!committed) {
+                mysql_query(conn, "ROLLBACK");
+            }
+        }
+        void commit() { mysql_query(conn, "COMMIT"); committed = true; }
+    };
+    Transaction txn(m_conn);
 
     // Update money
     char moneyBuf[256];
     std::snprintf(moneyBuf, sizeof(moneyBuf),
                   "UPDATE accounts SET money=%d WHERE username='%s'",
                   inv.money, escUser.data());
-    if (!query(std::string(moneyBuf))) goto rollback;
+    if (!query(std::string(moneyBuf))) return;
 
     // Wipe existing inventory rows for this player
     {
         std::string delSql = std::string("DELETE FROM inventory WHERE username='")
                            + escUser.data() + "'";
-        if (!query(delSql)) goto rollback;
+        if (!query(delSql)) return;
     }
 
     // Insert grid slots
@@ -371,7 +378,7 @@ void Database::saveAccount(const std::string& username,
             escUser.data(), i, item.itemID, escKey.data(),
             static_cast<int>(item.category), item.quantity, item.weight);
 
-        if (!query(std::string(buf))) goto rollback;
+        if (!query(std::string(buf))) return;
     }
 
     // Insert equipped slots
@@ -391,7 +398,7 @@ void Database::saveAccount(const std::string& username,
             escUser.data(), i, item.itemID, escKey.data(),
             static_cast<int>(item.category), item.quantity, item.weight);
 
-        if (!query(std::string(buf))) goto rollback;
+        if (!query(std::string(buf))) return;
     }
 
     // Insert stash slots
@@ -411,16 +418,11 @@ void Database::saveAccount(const std::string& username,
             escUser.data(), i, item.itemID, escKey.data(),
             static_cast<int>(item.category), item.quantity, item.weight);
 
-        if (!query(std::string(buf))) goto rollback;
+        if (!query(std::string(buf))) return;
     }
 
-    mysql_query(m_conn, "COMMIT");
+    txn.commit();
     DZ_LOG_INFO("[DB] Saved inventory for '%s'", username.c_str());
-    return;
-
-rollback:
-    mysql_query(m_conn, "ROLLBACK");
-    DZ_LOG_ERROR("[DB] saveAccount ROLLBACK for '%s'", username.c_str());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

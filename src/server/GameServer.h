@@ -40,7 +40,7 @@ private:
     void onClientDisconnect(uint32_t peerIdx);
     void onInputReceived(uint32_t peerIdx, const InputPacket& pkt);
     void onDamage(const DamageResult& result);
-    void onDeath(Entity victim, Entity killer);
+    void onDeath(Entity victim, Entity killer, DamageType type);
     void onExtracted(Entity player, uint8_t zoneID);
     void onDeathLoot(Entity player);
     void onBuildingDestroyed(uint32_t buildingNetID, bool explosion);
@@ -73,11 +73,13 @@ private:
     int      m_activePlayers = 0; // 생존(현재 접속 중) 플레이어 수
     uint16_t m_port = 0;
     bool     m_childServerLaunched = false;
+    bool     m_wasNight = false;
 
     // ── Map setup ─────────────────────────────────────────────────────────────
     bool loadMap(const std::string& path);
     void spawnZombies();
     void spawnLootBoxes();
+    void spawnNightWave();
 
     // ── State ─────────────────────────────────────────────────────────────────
     World           m_world;

@@ -186,7 +186,7 @@ void Game::runLogin() {
             if (quitBtn.hit(cx, cy)) { m_running = false; break; }
         }
 
-        SDL_Delay(16);
+        // SDL_Delay(16); removed to rely on VSync
     }
 }
 
@@ -252,7 +252,7 @@ void Game::runLobby() {
 
         processInventoryMouse(); // Handles drag and drop in stash/inventory
 
-        SDL_Delay(16);
+        // SDL_Delay(16); removed to rely on VSync
     }
 }
 
@@ -296,7 +296,7 @@ void Game::runMatchmaking() {
         m_renderer.drawMatchmaking(m_matchmakingTimer);
         m_renderer.endFrame();
 
-        SDL_Delay(16);
+        // SDL_Delay(16); removed to rely on VSync
     }
 }
 
@@ -362,7 +362,7 @@ void Game::runConnecting() {
         m_renderer.drawMatchmaking(m_matchmakingTimer + 3.0f); // 매칭 화면 유지
         m_renderer.endFrame();
 
-        SDL_Delay(16);
+        // SDL_Delay(16); removed to rely on VSync
     }
 
     // 타임아웃
@@ -408,7 +408,7 @@ void Game::runMapLoading() {
         m_renderer.drawMapLoading(progress);
         m_renderer.endFrame();
 
-        SDL_Delay(16);
+        // SDL_Delay(16); removed to rely on VSync
     }
 }
 
@@ -504,10 +504,10 @@ void Game::runDead() {
                                      m_net.localTeam(), "", "normal", 0.0f, 0.0f);
                                      
         m_renderer.drawParticles(m_camera);
-        m_renderer.drawDeathScreen(m_deathTimer);
+        m_renderer.drawDeathScreen(m_deathTimer, m_net.getDeathCause());
         m_renderer.endFrame();
 
-        SDL_Delay(16);
+        // SDL_Delay(16); removed to rely on VSync
     }
 }
 
@@ -1116,7 +1116,7 @@ void Game::renderIngame() {
                        extractProg, teamID,
                        m_extractCountdown, teamNames[tidx],
                        wName, wGrade,
-                       teamAlive, m_net.allianceBits());
+                       teamAlive, m_net.allianceBits(), m_net.gameTime());
 
     // 7. 미니맵
     m_renderer.drawMinimap(m_net, m_net.localX(), m_net.localY(), teamID);

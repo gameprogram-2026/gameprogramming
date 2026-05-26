@@ -299,6 +299,19 @@ void NetworkClient::update(float dt) {
                             m_localHp    = 0.0f;
                             m_localFlags = STATUS_DEAD;
                             m_localDead  = true;
+                            
+                            if (death.damageType == 4) { // Zombie
+                                m_deathCause = "좀비에게 뜯어먹혔습니다.";
+                            } else if (death.damageType == 3) { // Fire
+                                m_deathCause = "불에 타죽었습니다.";
+                            } else if (death.damageType == 2) { // Explosion
+                                m_deathCause = "폭발에 휘말려 산산조각 났습니다.";
+                            } else if (death.killerName[0] != '\0') {
+                                m_deathCause = std::string(death.killerName) + "에게 살해당했습니다.";
+                            } else {
+                                m_deathCause = "과다 출혈로 사망했습니다.";
+                            }
+                            
                             DZ_LOG_INFO("[Client] 사망 처리: netID=%u", m_localNetID);
                         } else {
                             auto* rem = findRemote(death.victimID);
@@ -425,7 +438,7 @@ void NetworkClient::processSnapshot(const uint8_t* data, size_t len) {
 
             auto* remote = findRemote(rec.entityID);
             if (!remote) {
-                if (m_remoteCount < 64) {
+                if (m_remoteCount < 512) {
                     remote = &m_remotes[m_remoteCount++];
                     remote->entityID = rec.entityID;
                     remote->recType  = rec.recordType;
@@ -437,6 +450,11 @@ void NetworkClient::processSnapshot(const uint8_t* data, size_t len) {
                     remote->snapDt   = WORLD_TICK_DT;
                 }
             } else {
+                // 과거 틱의 패킷(지연 도착)은 무시하여 과거로 순간이동(Rubber-banding) 방지
+                if (hdr->serverTick < remote->snap[1].tick) {
+                    continue;
+                }
+
                 // recordType 업데이트 (엔티티 ID 재사용 시 REC_PLAYER -> REC_LOOT 등 변경 가능)
                 remote->recType = rec.recordType;
 
@@ -519,12 +537,20 @@ void NetworkClient::replayInputsFrom(uint32_t fromSeq) {
 // updateRemoteInterp — lerp all remote entities between snapshots
 // ─────────────────────────────────────────────────────────────────────────────
 void NetworkClient::updateRemoteInterp(float dt) {
-    for (int i = 0; i < m_remoteCount; ++i) {
+    for (int i = 0; i < m_remoteCount; ) {
         auto& rem = m_remotes[i];
         rem.interpT += dt;
+        
+        if (rem.interpT > 1.0f) {
+            // 1초 이상 스냅샷 업데이트가 없으면 엔티티가 파괴되었거나 멀어진 것으로 간주하여 제거
+            m_remotes[i] = m_remotes[--m_remoteCount];
+            continue;
+        }
+        
         float t = rem.snapDt > 0.0f ? (rem.interpT / rem.snapDt) : 1.0f;
         if (t > 1.0f) t = 1.0f;
         (void)t; // position read by Renderer via snap[0/1] + interpT
+        ++i;
     }
 }
 

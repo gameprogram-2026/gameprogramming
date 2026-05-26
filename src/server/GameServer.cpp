@@ -62,7 +62,7 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
             if (teamA && teamB) m_alliance.handleBetrayal(teamA, teamB);
         }
     });
-    m_combat.onDeath  ([this](Entity v, Entity k)           { onDeath(v, k); });
+    m_combat.onDeath  ([this](Entity v, Entity k, DamageType t) { onDeath(v, k, t); });
 
     // Extraction callbacks
     m_extraction.onExtracted([this](Entity p, uint8_t z)   { onExtracted(p, z); });
@@ -206,11 +206,39 @@ void GameServer::tick(float dt) {
 
     m_world.flushDestroyQueue();
 
-    // 1초마다 팀 상태 브로드캐스트
+    // 1초마다 팀 상태 브로드캐스트 (시간 포함)
     m_teamStatusTimer -= dt;
     if (m_teamStatusTimer <= 0.0f) {
         m_teamStatusTimer = 1.0f;
         broadcastTeamStatus();
+    }
+
+    // ── 낮/밤 웨이브 디펜스 ──────────────────────────────────────────────────────────
+    // 1주기: 낮 2분(120초), 밤 1분(60초) = 180초
+    float timeOfDay = std::fmod(m_gameTime, 180.0f);
+    bool isNight = timeOfDay > 120.0f;
+    
+    if (isNight && !m_wasNight) {
+        m_wasNight = true;
+        DZ_LOG_INFO("[Server] Night has fallen! Spawning zombie wave...");
+        spawnNightWave();
+        // 밤이 되면 비명 소리 재생
+        m_noise.addEvent(0, 0, 9999.0f, 4, 1.0f); 
+    } else if (!isNight && m_wasNight) {
+        m_wasNight = false;
+        DZ_LOG_INFO("[Server] Day breaks! Cleaning up excess zombies.");
+        // 낮이 되면 남은 웨이브 좀비들을 정리하여 안전 구역을 확보 (최대 15마리만 유지)
+        int zCount = 0;
+        for (EntityID id : m_world.alive()) {
+            Entity e{id};
+            if (m_world.tryGet<ZombieAIComponent>(e) && m_world.tryGet<HealthComponent>(e)->isAlive) {
+                if (zCount > 15) {
+                    m_world.destroyEntity(e);
+                } else {
+                    zCount++;
+                }
+            }
+        }
     }
 
     // ── 라운드 타이머 ─────────────────────────────────────────────────────────
@@ -371,15 +399,16 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
     Entity e = m_world.createEntity();
     uint32_t netID = m_nextPlayerNetID++;
 
-    static const float spawnX[4] = { 2*32.f,  116*32.f, 2*32.f,  116*32.f };
-    static const float spawnY[4] = { 2*32.f,  2*32.f,  116*32.f, 116*32.f };
+    // 스폰 위치를 무작위로 변경하여 항상 같은 위치(구석)에서 태어나지 않도록 함
+    float spawnX = static_cast<float>((std::rand() % 96 + 16) * TILE_SIZE);
+    float spawnY = static_cast<float>((std::rand() % 96 + 16) * TILE_SIZE);
 
     int teamIdx = static_cast<int>(peerIdx / TEAM_SIZE); // 0-based
     if (teamIdx >= 4) teamIdx = 0;
 
     auto& xf  = m_world.addComponent<TransformComponent>(e);
-    xf.x      = spawnX[teamIdx] + (peerIdx % TEAM_SIZE) * 32.0f;
-    xf.y      = spawnY[teamIdx];
+    xf.x      = spawnX;
+    xf.y      = spawnY;
 
     auto& hp  = m_world.addComponent<HealthComponent>(e);
     hp.maxHp     = 100.0f;
@@ -537,9 +566,24 @@ void GameServer::onDamage(const DamageResult& result) {
     }
 }
 
-void GameServer::onDeath(Entity victim, Entity /*killer*/) {
+void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
     DeathEventPacket pkt{};
     pkt.packetType = static_cast<uint8_t>(PacketType::S2C_DeathEvent);
+    pkt.damageType = static_cast<uint8_t>(type);
+    
+    if (killer.isValid()) {
+        auto* knet = m_world.tryGet<NetworkComponent>(killer);
+        if (knet) {
+            pkt.killerID = static_cast<uint16_t>(knet->netID);
+            for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
+                if (m_net.isConnected(pi) && m_net.peer(pi).playerNetID == knet->netID) {
+                    std::strncpy(pkt.killerName, m_peerUsernames[pi].c_str(), sizeof(pkt.killerName) - 1);
+                    break;
+                }
+            }
+        }
+    }
+
     auto* net = m_world.tryGet<NetworkComponent>(victim);
     if (net) {
         pkt.victimID = static_cast<uint16_t>(net->netID);
@@ -900,7 +944,65 @@ void GameServer::broadcastTeamStatus() {
         if (m_alliance.isAllied(pairA[k], pairB[k]))
             allianceBits |= (1 << k);
 
-    m_net.broadcastTeamStatus(m_world, allianceBits, static_cast<uint16_t>(m_gameTimer));
+    m_net.broadcastTeamStatus(m_world, allianceBits, static_cast<uint16_t>(std::fmod(m_gameTime, 180.0f)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// spawnNightWave — 밤 시작 시 플레이어들 주변에 웨이브 생성
+// ─────────────────────────────────────────────────────────────────────────────
+void GameServer::spawnNightWave() {
+    int waveSize = 15 + m_activePlayers * 5; // 웨이브 좀비 수 대폭 하향 (너무 많아지는 것 방지)
+    int spawned = 0;
+    
+    // 현재 살아있는 플레이어 수집
+    std::vector<Entity> players;
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (net && net->role == NetRole::LocallyOwned) {
+            players.push_back(e);
+        }
+    }
+    if (players.empty()) return;
+
+    for (int i = 0; i < waveSize; ++i) {
+        // 랜덤 플레이어 한 명을 골라서 그 주변에 스폰
+        Entity target = players[std::rand() % players.size()];
+        auto* txf = m_world.tryGet<TransformComponent>(target);
+        if (!txf) continue;
+
+        // 플레이어 반경 600~800 픽셀 위치에서 스폰 (화면 밖)
+        float angle = static_cast<float>(std::rand() % 360) * 3.14159f / 180.0f;
+        float dist  = 600.0f + static_cast<float>(std::rand() % 200);
+        float sx = txf->x + std::cos(angle) * dist;
+        float sy = txf->y + std::sin(angle) * dist;
+
+        Entity z = m_world.createEntity();
+        auto& zxf = m_world.addComponent<TransformComponent>(z);
+        zxf.x = sx;
+        zxf.y = sy;
+        zxf.rotation = 0.0f;
+
+        auto& hp = m_world.addComponent<HealthComponent>(z);
+        hp.maxHp = 100.0f;
+        hp.currentHp = 100.0f;
+        hp.team = Team::Neutral;
+        hp.isAlive = true;
+
+        auto& ai = m_world.addComponent<ZombieAIComponent>(z);
+        ai.state = ZombieState::Frenzy; // 태어나자마자 무조건 광분 추격
+        ai.targetX = txf->x;
+        ai.targetY = txf->y;
+        ai.type  = (std::rand() % 10 == 0) ? ZombieType::Brute : ZombieType::Runner; // 밤에는 빠른 놈들과 강력한 놈들 위주
+        
+        auto& net = m_world.addComponent<NetworkComponent>(z);
+        net.netID = m_nextPlayerNetID++;
+        net.role  = NetRole::ServerAuth;
+        net.markDirty(DIRTY_TRANSFORM);
+
+        spawned++;
+    }
+    DZ_LOG_INFO("[Server] Spawned %d wave zombies for night defense.", spawned);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -946,8 +1048,10 @@ void GameServer::spawnLootBoxes() {
         const auto& b = buildings[std::rand() % buildings.size()];
         
         // 건물 내 랜덤 위치
-        int tx = b.x + 1 + std::rand() % (b.w - 2);
-        int ty = b.y + 1 + std::rand() % (b.h - 2);
+        int b_w = std::max(1, b.w - 2);
+        int b_h = std::max(1, b.h - 2);
+        int tx = b.x + 1 + std::rand() % b_w;
+        int ty = b.y + 1 + std::rand() % b_h;
 
         Entity e = m_world.createEntity();
         auto& xf = m_world.addComponent<TransformComponent>(e);

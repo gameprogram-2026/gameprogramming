@@ -29,6 +29,10 @@ bool TileMap::loadFromJSON(const std::string& path) {
     }
     std::fseek(f, 0, SEEK_END);
     long sz = std::ftell(f);
+    if (sz < 0) {
+        std::fclose(f);
+        return false;
+    }
     std::rewind(f);
     std::vector<char> buf(sz + 1, 0);
     std::fread(buf.data(), 1, sz, f);

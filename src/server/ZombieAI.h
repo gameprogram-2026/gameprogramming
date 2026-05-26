@@ -38,7 +38,7 @@ enum class ZombieState : uint8_t {
 constexpr float ZOMBIE_HEARING_RADIUS   = 384.0f; ///< 12 tiles base hearing range
 constexpr float ZOMBIE_FRENZY_CHAIN_R   = 640.0f; ///< 20 m chain aggro radius
 constexpr float ZOMBIE_SIGHT_RADIUS     = 320.0f; ///< 10 tiles line-of-sight range
-constexpr float ZOMBIE_ATTACK_RADIUS    =  50.0f; ///< Melee reach (넓게 — CSP 오차 허용)
+constexpr float ZOMBIE_ATTACK_RADIUS    =  25.0f; ///< Melee reach
 
 // Shambler (default)
 constexpr float ZOMBIE_SPEED_IDLE       =  38.0f; ///< px/s
@@ -59,7 +59,7 @@ constexpr float BRUTE_SPEED_CHASE       =  40.0f; ///< 매우 느림
 constexpr float BRUTE_SPEED_FRENZY      =  55.0f;
 constexpr float BRUTE_ATTACK_DAMAGE     =  40.0f; ///< 기본의 2배
 constexpr float BRUTE_ATTACK_RATE       =   2.0f;
-constexpr float BRUTE_ATTACK_RADIUS     =  40.0f; ///< 더 긴 팔
+constexpr float BRUTE_ATTACK_RADIUS     =  35.0f; ///< 더 긴 팔
 
 constexpr float ZOMBIE_PATROL_INTERVAL  =   4.0f; ///< s per waypoint
 constexpr float ZOMBIE_ALERT_DECAY      =   0.12f;///< alert/s in silence

@@ -139,6 +139,9 @@ public:
     void        clearDead()       noexcept       { m_localDead = false; }
     bool        justSpawned()     const noexcept { return m_justSpawned; }
     void        clearJustSpawned()noexcept       { m_justSpawned = false; }
+    
+    std::string m_deathCause;
+    const std::string& getDeathCause() const { return m_deathCause; }
     bool        consumeSirenEvent() noexcept {
         bool res = m_hasSirenEvent;
         m_hasSirenEvent = false;
@@ -152,7 +155,7 @@ public:
     uint8_t  allianceBits() const noexcept { return m_allianceBits; }
     uint16_t gameTime() const { return m_gameTimeSec; }
 
-    const std::array<RemoteEntityState, 64>& remotes() const { return m_remotes; }
+    const std::array<RemoteEntityState, 512>& remotes() const { return m_remotes; }
     int  remoteCount() const noexcept { return m_remoteCount; }
 
     // 좀비 사망 이벤트 큐 (S2C_DeathEvent 기반, UDP 순서 무관)
@@ -234,7 +237,7 @@ private:
     int      m_predCount= 0;
 
     // ── Remote entities ───────────────────────────────────────────────────────
-    std::array<RemoteEntityState, 64> m_remotes{};
+    std::array<RemoteEntityState, 512> m_remotes{};
     int m_remoteCount = 0;
 
     // ── 좀비 사망 이벤트 큐 ───────────────────────────────────────────────────

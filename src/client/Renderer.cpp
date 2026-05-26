@@ -612,7 +612,7 @@ void Renderer::drawMapLoading(float progress) {
     }
 }
 // ─────────────────────────────────────────────────────────────────────────────
-void Renderer::drawDeathScreen(float countdown) {
+void Renderer::drawDeathScreen(float countdown, const std::string& cause) {
     TTF_Font* fLg  = m_fonts.get(72);
     TTF_Font* fMd  = m_fonts.get(24);
     TTF_Font* fSm  = m_fonts.get(16);
@@ -646,6 +646,9 @@ void Renderer::drawDeathScreen(float countdown) {
     int textY = panY + 30;
     drawTextShadow("사  망", W/2, textY,
                    {255, 60, 60, 255}, {80, 0, 0, 200}, fLg, true);
+
+    drawTextShadow(cause, W/2, textY + 80,
+                   {220, 220, 220, 255}, {0, 0, 0, 200}, m_fonts.mono(24), true);
 
     // 구분선
     SDL_SetRenderDrawColor(m_renderer, 120, 20, 20, 200);
@@ -1305,12 +1308,26 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
 
     // 밤/낮에 따른 안개 색상과 농도
-    uint8_t fogAlpha = 195;
-    uint8_t r = 0, g = 0, b = 0;
-    if (gameTime >= 240.0f) { // 밤
-        fogAlpha = 240; // 더 어둡게
-        r = 60; // 붉은 기운
+    float timeOfDay = std::fmod(gameTime, 180.0f);
+    bool isNight = timeOfDay > 120.0f;
+
+    // 낮에는 안개 없음(0), 밤이 되기 5초 전부터 점진적으로 어두워짐
+    float darkness = 0.0f;
+    if (timeOfDay >= 115.0f && timeOfDay <= 120.0f) {
+        darkness = (timeOfDay - 115.0f) / 5.0f;
+    } else if (isNight) {
+        darkness = 1.0f;
     }
+
+    if (darkness <= 0.01f) {
+        // 완전한 낮이면 시야 제한(안개)을 아예 그리지 않음
+        return;
+    }
+
+    uint8_t fogAlpha = static_cast<uint8_t>(darkness * 245.0f); // 밤 최고 농도 245
+    uint8_t r = static_cast<uint8_t>(darkness * 10.0f);
+    uint8_t g = static_cast<uint8_t>(darkness * 10.0f);
+    uint8_t b = static_cast<uint8_t>(darkness * 30.0f);
 
     // 전체를 어두운 안개로 채움
     SDL_SetRenderDrawColor(m_renderer, r, g, b, fogAlpha);
@@ -1326,8 +1343,8 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 
     // 화면 대각선보다 충분히 큰 반지름 (시야가 화면 끝까지 닿도록)
     float R = static_cast<float>(std::max(m_screenW, m_screenH)) * 1.5f;
-    if (gameTime >= 240.0f) {
-        R = 300.0f; // 밤에는 시야 반경 대폭 축소
+    if (isNight) {
+        R = 350.0f; // 밤에는 시야 반경 대폭 축소 (손전등 효과)
     }
 
     const float aimRad  = aimAngleDeg * DEG2RAD;
@@ -1620,7 +1637,8 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
                         const std::string& weaponName,
                         const std::string& weaponGrade,
                         const int teamAlive[4],
-                        uint8_t allianceBits) {
+                        uint8_t allianceBits,
+                        float gameTime) {
     TTF_Font* fTiny = m_fonts.get(11);
     TTF_Font* fSm   = m_fonts.get(13);
     TTF_Font* fMd   = m_fonts.get(16);
@@ -1634,6 +1652,61 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
     float pulse = std::sin(ticks * 0.012f) * 0.5f + 0.5f;
 
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+
+    // ══════════════════════════════════════════════════════════════
+    // 상단 낮/밤 시계 UI (Day X - Time)
+    // ══════════════════════════════════════════════════════════════
+    {
+        float timeOfDay = std::fmod(gameTime, 180.0f);
+        int currentDay = static_cast<int>(gameTime / 180.0f) + 1;
+        bool isNight = timeOfDay > 120.0f;
+
+        // 시간 포맷 (0~180초를 06:00 ~ 익일 06:00 로 변환)
+        // 낮(120초) = 12시간 (06:00 ~ 18:00), 밤(60초) = 12시간 (18:00 ~ 06:00)
+        int hours, minutes;
+        if (!isNight) {
+            float dayT = timeOfDay / 120.0f;
+            float timeH = 6.0f + dayT * 12.0f;
+            hours = static_cast<int>(timeH);
+            minutes = static_cast<int>((timeH - hours) * 60.0f);
+        } else {
+            float nightT = (timeOfDay - 120.0f) / 60.0f;
+            float timeH = 18.0f + nightT * 12.0f;
+            hours = static_cast<int>(timeH) % 24;
+            minutes = static_cast<int>((timeH - static_cast<int>(timeH)) * 60.0f);
+        }
+        
+        char clockStr[64];
+        std::snprintf(clockStr, sizeof(clockStr), "DAY %d - %02d:%02d", currentDay, hours, minutes);
+
+        SDL_Color clockCol = isNight ? SDL_Color{220, 60, 60, 255} : SDL_Color{220, 220, 220, 255};
+        
+        int bw = 180, bh = 40;
+        int bx = m_screenW / 2 - bw / 2;
+        int by = 10;
+        
+        SDL_SetRenderDrawColor(m_renderer, 10, 10, 15, 220);
+        SDL_Rect bg = {bx, by, bw, bh};
+        SDL_RenderFillRect(m_renderer, &bg);
+        
+        SDL_SetRenderDrawColor(m_renderer, 100, 100, 100, 255);
+        SDL_RenderDrawRect(m_renderer, &bg);
+        
+        drawTextShadow(clockStr, bx + bw / 2, by + bh / 2, clockCol, {0,0,0,150}, fMd, true);
+        
+        // 상태 텍스트 (정중앙 팝업)
+        if (isNight) {
+            if (timeOfDay < 125.0f) {
+                uint8_t a = static_cast<uint8_t>(std::max(0.0f, (1.0f - (timeOfDay - 120.0f) / 5.0f)) * 255);
+                drawTextShadow("NIGHT WAVE STARTED!", m_screenW / 2, m_screenH / 4, {255, 30, 30, a}, {0,0,0,a}, fLg, true);
+            }
+        } else {
+            if (timeOfDay < 5.0f && currentDay > 1) {
+                uint8_t a = static_cast<uint8_t>(std::max(0.0f, (1.0f - timeOfDay / 5.0f)) * 255);
+                drawTextShadow("SURVIVED THE NIGHT", m_screenW / 2, m_screenH / 4, {60, 255, 60, a}, {0,0,0,a}, fLg, true);
+            }
+        }
+    }
 
     // ══════════════════════════════════════════════════════════════
     // 출혈 비네트 (화면 가장자리 붉게 — 드라마틱하게)

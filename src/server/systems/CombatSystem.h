@@ -31,7 +31,7 @@ struct DamageResult {
 class CombatSystem {
 public:
     using DamageCallback = std::function<void(const DamageResult&)>;
-    using DeathCallback  = std::function<void(Entity victim, Entity killer)>;
+    using DeathCallback  = std::function<void(Entity victim, Entity killer, DamageType type)>;
 
     void onDamage(DamageCallback cb) { m_onDamage = std::move(cb); }
     void onDeath(DeathCallback cb)   { m_onDeath  = std::move(cb); }

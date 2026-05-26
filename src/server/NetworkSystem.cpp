@@ -42,6 +42,7 @@ void NetworkSystem::pollEvents() {
         switch (ev.type) {
         case ENET_EVENT_TYPE_CONNECT: {
             uint32_t slot = assignPeerSlot(ev.peer);
+            if (slot == MAX_CLIENTS) break;
             ev.peer->data = reinterpret_cast<void*>(static_cast<uintptr_t>(slot));
             DZ_LOG_INFO("[Net] Client connected → slot %u", slot);
             if (m_onConnect) m_onConnect(slot);
@@ -71,20 +72,44 @@ void NetworkSystem::pollEvents() {
 void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
     if (!m_host) return;
 
-    // Serialise all alive entities into EntityStateRecord array
     static uint8_t buf[sizeof(SnapshotHeader) +
                         MAX_SNAPSHOT_ENTITIES * sizeof(EntityStateRecord)];
 
     auto* header = reinterpret_cast<SnapshotHeader*>(buf);
-    header->packetType  = static_cast<uint8_t>(PacketType::S2C_WorldSnapshot);
-    header->serverTick  = tick;
-    header->entityCount = 0;
-
     auto* records = reinterpret_cast<EntityStateRecord*>(buf + sizeof(SnapshotHeader));
+
     int count = 0;
 
+    auto flushPacket = [&]() {
+        if (count == 0) return;
+        header->packetType  = static_cast<uint8_t>(PacketType::S2C_WorldSnapshot);
+        header->serverTick  = tick;
+        header->entityCount = static_cast<uint8_t>(count);
+
+        size_t totalLen = sizeof(SnapshotHeader) + count * sizeof(EntityStateRecord);
+        // ENET_PACKET_FLAG_UNSEQUENCED = 2, 방지: ENet이 순서가 뒤집힌 청크를 폐기하지 않도록 함
+        ENetPacket* packet = enet_packet_create(buf, totalLen, 2);
+
+        for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
+            if (!m_peers[pi].connected) continue;
+
+            ENetPacket* peerPkt = enet_packet_create(packet->data, packet->dataLength, 2);
+            auto* precs = reinterpret_cast<EntityStateRecord*>(peerPkt->data + sizeof(SnapshotHeader));
+
+            for (int ri = 0; ri < count; ++ri) {
+                if (precs[ri].entityID == static_cast<uint16_t>(m_peers[pi].playerNetID)) {
+                    precs[ri].seqAck = static_cast<uint16_t>(m_peers[pi].lastInputSeq);
+                    precs[ri].computeChecksum();
+                    break;
+                }
+            }
+            enet_peer_send(m_peers[pi].peer, CHAN_UNRELIABLE, peerPkt);
+        }
+        enet_packet_destroy(packet);
+        count = 0;
+    };
+
     for (EntityID id : world.alive()) {
-        if (count >= static_cast<int>(MAX_SNAPSHOT_ENTITIES)) break;
         Entity e{id};
 
         auto* net = world.tryGet<NetworkComponent>(e);
@@ -106,21 +131,18 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
         }
         rec.entityID    = static_cast<uint16_t>(net->netID);
         rec.statusFlags = 0;
-        rec.seqAck      = 0;  // default: 플레이어는 per-peer 루프에서 덮어씀
+        rec.seqAck      = 0;
         rec.x = xf ? xf->x : 0.0f;
         rec.y = xf ? xf->y : 0.0f;
 
-        // Build status flags
         if (hp && hp->isAlive)       rec.statusFlags |= STATUS_ALIVE;
         if (hp && !hp->isAlive)      rec.statusFlags |= STATUS_DEAD;
         if (cbt && cbt->isBleeding)  rec.statusFlags |= STATUS_BLEEDING;
         if (cbt && cbt->isOnFire)    rec.statusFlags |= STATUS_ON_FIRE;
         if (cbt && cbt->isReloading) rec.statusFlags |= STATUS_RELOADING;
 
-        // seqAck = HP (모든 엔티티). 로컬 플레이어는 per-peer 루프에서 inputSeq로 덮어씀
         if (hp) rec.seqAck = static_cast<uint16_t>(std::max(0.0f, hp->currentHp));
 
-        // 좀비: statusFlags 상위 2비트에 ZombieType 인코딩
         if (rec.recordType == REC_ZOMBIE) {
             auto* ai = world.tryGet<ZombieAIComponent>(e);
             if (ai) {
@@ -133,30 +155,15 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
         }
 
         rec.computeChecksum();
-    }
 
-    header->entityCount = static_cast<uint8_t>(count);
-    size_t totalLen = sizeof(SnapshotHeader) + count * sizeof(EntityStateRecord);
-
-    // Send per-peer to stamp correct seqAck for the player each peer owns
-    for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
-        if (!m_peers[pi].connected) continue;
-
-        // Stamp seqAck in the player's own record
-        for (int ri = 0; ri < count; ++ri) {
-            if (records[ri].entityID == static_cast<uint16_t>(m_peers[pi].playerNetID)) {
-                records[ri].seqAck = static_cast<uint16_t>(m_peers[pi].lastInputSeq);
-                records[ri].computeChecksum();
-                break;
-            }
+        if (count >= static_cast<int>(MAX_SNAPSHOT_ENTITIES)) {
+            flushPacket();
         }
-
-        ENetPacket* pkt = enet_packet_create(buf, totalLen, 0); // unreliable
-        enet_peer_send(m_peers[pi].peer, CHAN_UNRELIABLE, pkt);
     }
-
-    enet_host_flush(m_host);
+    
+    flushPacket();
 }
+
 
 void NetworkSystem::sendReliable(uint32_t idx, const void* data, size_t len) {
     if (!m_peers[idx].connected) return;
@@ -200,7 +207,7 @@ uint32_t NetworkSystem::assignPeerSlot(ENetPeer* peer) {
     }
     // No slot — disconnect the peer
     enet_peer_disconnect(peer, 0);
-    return 0;
+    return MAX_CLIENTS;
 }
 
 void NetworkSystem::handlePacket(uint32_t peerIdx,

@@ -74,6 +74,9 @@ void MovementSystem::applyInput(World& world, const TileMap& map,
 
         // ── Normalize and apply movement ───────────────────────────────────────
         float mx = input.moveX, my = input.moveY;
+        if (!std::isfinite(mx) || !std::isfinite(my)) {
+            mx = 0.0f; my = 0.0f;
+        }
         float len = std::sqrt(mx * mx + my * my);
         if (len > 0.01f) { mx /= len; my /= len; }
 

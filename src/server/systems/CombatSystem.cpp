@@ -61,7 +61,7 @@ void CombatSystem::tickBleeding(World& world, float dt) {
 
         if (!hp->isAlive) {
             DZ_LOG_INFO("[Combat] Entity %u bled out", e.id);
-            if (m_onDeath) m_onDeath(e, Entity{NULL_ENTITY});
+            if (m_onDeath) m_onDeath(e, Entity{NULL_ENTITY}, DamageType::Melee);
         }
     }
 }
@@ -84,7 +84,7 @@ void CombatSystem::tickFireDamage(World& world, float dt) {
             cbt.fireDamageTimer -= FIRE_TICK_INTERVAL;
             hp->applyDamage(FIRE_DPS * FIRE_TICK_INTERVAL, DamageType::Fire);
             if (!hp->isAlive && m_onDeath)
-                m_onDeath(e, Entity{NULL_ENTITY});
+                m_onDeath(e, Entity{NULL_ENTITY}, DamageType::Fire);
         }
     }
 }
@@ -152,10 +152,17 @@ bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
         auto* vhp = world.tryGet<HealthComponent>(victim);
         if (!vxf || !vhp || !vhp->isAlive) continue;
 
-        // AABB vs point test (simplified — victim is treated as point)
-        float dx = std::abs(vxf->x - hitCX);
-        float dy = std::abs(vxf->y - hitCY);
-        if (dx > hw || dy > hh) continue;
+        // Local space transformation for rotated hitbox (OBB)
+        float vx = vxf->x - hitCX;
+        float vy = vxf->y - hitCY;
+        
+        float cosA = std::cos(-rad);
+        float sinA = std::sin(-rad);
+        
+        float localX = vx * cosA - vy * sinA;
+        float localY = vx * sinA + vy * cosA;
+
+        if (std::abs(localX) > hw || std::abs(localY) > hh) continue;
 
         // Friendly-fire check
         if (ahp->team == vhp->team && ahp->team != Team::Neutral) continue;
@@ -166,7 +173,7 @@ bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
         // Bleed chance
         auto* vcbt = world.tryGet<CombatComponent>(victim);
         if (vcbt && !vcbt->isBleeding) {
-            float roll = static_cast<float>(std::rand()) / RAND_MAX;
+            float roll = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
             if (roll < acbt->melee.bleedChance)
                 vcbt->applyBleed(acbt->melee.bleedDps, acbt->melee.bleedDuration);
         }
@@ -230,7 +237,7 @@ DamageResult CombatSystem::applyDamage(World& world, Entity victim, Entity attac
         DZ_LOG_INFO("[Combat] Entity %u killed entity %u (%s)",
             res.attackerID, res.victimID,
             type == DamageType::Fire ? "fire" : "damage");
-        if (m_onDeath) m_onDeath(victim, attacker);
+        if (m_onDeath) m_onDeath(victim, attacker, type);
     }
     return res;
 }
@@ -258,7 +265,7 @@ void CombatSystem::triggerExplosion(World& world, float wx, float wy,
         float falloff = 1.0f - (dist / radius) * 0.5f;
         auto result = applyDamage(world, e, source, damage * falloff,
                                    DamageType::Explosion);
-        if (m_onDamage) m_onDamage(result);
+        // m_onDamage is already fired inside applyDamage
 
         // Knockback from blast
         auto* cbt = world.tryGet<CombatComponent>(e);

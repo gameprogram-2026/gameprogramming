@@ -179,7 +179,8 @@ public:
                  const std::string& weaponName  = "",
                  const std::string& weaponGrade = "normal",
                  const int teamAlive[4] = nullptr,   ///< 팀1~4 생존 인원 (nullptr=미표시)
-                 uint8_t allianceBits  = 0);         ///< 연합 비트맵
+                 uint8_t allianceBits  = 0,          ///< 연합 비트맵
+                 float gameTime = 0.0f);             ///< 서버 진행 시간 (초)
 
     void drawBuildModeOverlay(bool active, int buildType, int mouseX, int mouseY,
                               const Camera& cam);
@@ -206,7 +207,7 @@ public:
     void drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam, float gameTime);
 
     void drawNoiseDebug(float wx, float wy, float radius, const Camera& cam);
-    void drawDeathScreen(float countdown);
+    void drawDeathScreen(float countdown, const std::string& cause);
     /// 화면 중앙 상단에 단기 알림 메시지 (무게 초과 등)
     void drawNotification(const std::string& msg, float alpha);
 

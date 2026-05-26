@@ -39,8 +39,11 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
     auto* xf = world.tryGet<TransformComponent>(zombie);
     if (!xf) return;
 
-    // 낮/밤에 따른 청각 반경 조절
-    float hearingMult = (gameTime < 240.0f) ? 0.5f : 1.5f;
+    float timeOfDay = std::fmod(gameTime, 180.0f);
+    bool isNight = timeOfDay > 120.0f;
+
+    // 낮/밤에 따른 청각 반경 조절 (밤에는 엄청 예민해짐)
+    float hearingMult = isNight ? 2.5f : 0.3f;
 
     // Sample loudest noise within hearing range
     uint8_t maxNoise = noise.maxCategoryNear(xf->x, xf->y, ZOMBIE_HEARING_RADIUS * hearingMult);
@@ -55,7 +58,7 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
             auto* ncbt = world.tryGet<CombatComponent>(nearest);
             if (nxf) {
                 float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
-                float sightMult = (gameTime < 240.0f) ? 0.5f : 1.5f;
+                float sightMult = isNight ? 3.0f : 0.4f;
                 // 출혈 중인 대상은 반경 2배로 멀리서도 냄새로 감지
                 if (ncbt && ncbt->isBleeding) sightMult *= 2.0f;
                 
@@ -172,6 +175,24 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
 
     case ZombieState::Dead:
         break;
+    }
+
+    // 밤이 되면 모든 좀비가 가장 가까운 플레이어를 찾아 광분(Frenzy) 모드로 돌입
+    if (isNight && (ai.state == ZombieState::Idle || ai.state == ZombieState::Alert)) {
+        Entity nearest = findNearestEnemy(world, zombie);
+        if (nearest.isValid()) {
+            auto* nxf = world.tryGet<TransformComponent>(nearest);
+            if (nxf) {
+                // 거리가 멀어도 감지 (반경 1500픽셀 내의 플레이어 무조건 타겟팅)
+                float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
+                if (dx*dx + dy*dy < 1500.0f * 1500.0f) {
+                    ai.targetX = nxf->x;
+                    ai.targetY = nxf->y;
+                    ai.state = ZombieState::Frenzy;
+                    ai.stateTimer = 0.0f;
+                }
+            }
+        }
     }
 }
 
@@ -359,7 +380,25 @@ Entity ZombieAISystem::findNearestEnemy(World& world, Entity zombie) {
 
         float dx = xf->x - zxf->x, dy = xf->y - zxf->y;
         float d  = std::sqrt(dx*dx + dy*dy);
-        if (d < nearDist && d < 600.0f) { nearDist = d; nearest = e; }
+        if (d < nearDist && d < 600.0f) {
+            bool hitWall = false;
+            if (m_map) {
+                int steps = static_cast<int>(d / 16.0f); // Check every 16 pixels (half tile)
+                for (int i = 1; i <= steps; ++i) {
+                    float t = static_cast<float>(i) / std::max(1, steps);
+                    float cx = zxf->x + dx * t;
+                    float cy = zxf->y + dy * t;
+                    if (m_map->isSolid(TileMap::worldToTile(cx), TileMap::worldToTile(cy))) {
+                        hitWall = true;
+                        break;
+                    }
+                }
+            }
+            if (!hitWall) {
+                nearDist = d; 
+                nearest = e;
+            }
+        }
     }
     return nearest;
 }

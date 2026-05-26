@@ -95,7 +95,9 @@ public:
 
     /// Marks entity for deferred destruction (safe to call during iteration).
     void destroyEntity(Entity e) {
-        m_pending.push_back(e.id);
+        if (std::find(m_pending.begin(), m_pending.end(), e.id) == m_pending.end()) {
+            m_pending.push_back(e.id);
+        }
     }
 
     /// Flush pending destructions — call once per tick, outside system loops.
