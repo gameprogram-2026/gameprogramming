@@ -50,6 +50,7 @@ private:
     void onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType);
     void onCraftRequest(uint32_t peerIdx, uint8_t recipeID);
     void onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID);
+    void sendInventorySyncToPeer(uint32_t peerIdx);
 
     void sendHpSyncToPeer(uint32_t peerIdx);   ///< HP + 상태 플래그를 해당 피어에 전송
     void broadcastTeamStatus();                 ///< 매초 팀 상태 브로드캐스트

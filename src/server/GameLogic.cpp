@@ -68,6 +68,9 @@ void GameLogic::handleFireThrow(uint32_t ownerID,
 void GameLogic::handleMeleeAttack(uint32_t ownerID) {
     Entity e = findOwnedEntity(ownerID);
     if (!e.isValid()) return;
+    auto* inv = m_world.tryGet<InventoryComponent>(e);
+    if (!inv || !inv->activeWeapon().isValid() || inv->activeWeapon().category != ItemCategory::Weapon) return;
+    
     m_combat.tryMeleeAttack(m_world, e);
 }
 
@@ -83,23 +86,26 @@ void GameLogic::handleRangedFire(uint32_t ownerID, float aimAngle) {
     auto* cbt = m_world.tryGet<CombatComponent>(e);
     if (!hp || !hp->isAlive || !xf || !cbt) return;
     if (cbt->fireCooldown > 0.0f || cbt->isReloading) return;
-    if (cbt->ammoInMag <= 0) return;
-
     // Determine damage and noise from equipped weapon
     float damage  = 60.0f;
     float noiseR  = NOISE_PISTOL_RADIUS;
     auto* inv = m_world.tryGet<InventoryComponent>(e);
-    if (inv) {
-        const Item& w = inv->activeWeapon();
-        if (w.isValid()) {
-            if (w.key == "pistol_9mm")   { damage = 60.0f; noiseR = NOISE_PISTOL_RADIUS; }
-            // Flamethrower handled separately as area fire — skip here
-        }
-    }
+    if (!inv) return;
+    
+    Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
+    if (!w.isValid() || w.category != ItemCategory::Weapon) return;
+    if (w.key != "pistol_9mm") return; // 현재는 권총만 사격 지원
+    if (w.quantity <= 0) return; // 잔탄 없음
 
-    --cbt->ammoInMag;
+    damage = 60.0f; noiseR = NOISE_PISTOL_RADIUS;
+
+    --w.quantity; // 잔탄 1 감소
     cbt->fireCooldown = cbt->fireRate;
     cbt->emitNoise(noiseR, 3); // Loud
+    
+    // 탄약 변경 사항을 클라이언트에 동기화
+    auto* net = m_world.tryGet<NetworkComponent>(e);
+    if (net) net->markDirty(DIRTY_INVENTORY);
 
     // 15% chance to trigger massive zombie wave penalty removed for better gameplay
 
@@ -162,12 +168,28 @@ void GameLogic::handleReload(uint32_t ownerID) {
     Entity e = findOwnedEntity(ownerID);
     if (!e.isValid()) return;
     auto* cbt = m_world.tryGet<CombatComponent>(e);
-    if (!cbt || cbt->isReloading) return;
-    if (cbt->ammoInMag >= cbt->magCapacity) return;
-    if (cbt->ammoReserve <= 0) return;
+    auto* inv = m_world.tryGet<InventoryComponent>(e);
+    if (!cbt || !inv || cbt->isReloading) return;
+    
+    Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
+    if (!w.isValid() || w.key != "pistol_9mm") return;
+    
+    int magCapacity = 7;
+    if (w.quantity >= magCapacity) return; // 이미 만탄
+    
+    // 예비 탄약이 있는지 확인
+    int reserve = 0;
+    for (const auto& slot : inv->slots) {
+        if (slot.isValid() && slot.key == "ammo_9mm") reserve += slot.quantity;
+    }
+    if (reserve <= 0) return; // 예비 탄약 없음
 
     cbt->isReloading = true;
     cbt->reloadTimer = cbt->reloadTime;
+    
+    auto* net = m_world.tryGet<NetworkComponent>(e);
+    if (net) net->markDirty(DIRTY_HEALTH); // 상태 플래그(RELOADING) 전송용
+    
     DZ_LOG_DEBUG("[Logic] Reload started for owner %u", ownerID);
 }
 

@@ -18,6 +18,7 @@ void CombatSystem::update(World& world, float dt) {
     tickBleeding(world, dt);
     tickFireDamage(world, dt);
     tickStamina(world, dt);
+    tickReloading(world, dt);
 
     auto& hpPool = world.pool<HealthComponent>();
     for (size_t i = 0; i < hpPool.owners().size(); ++i) {
@@ -110,6 +111,52 @@ void CombatSystem::tickStamina(World& world, float dt) {
                 // 어차피 클라이언트에서 로컬 보간을 하거나 해야함. 일단 간단히 dirty mark.
                 // DIRTY_HEALTH는 약간 부담될 수 있으나, 일단 적용.
                 net->markDirty(DIRTY_HEALTH);
+            }
+        }
+    }
+}
+
+void CombatSystem::tickReloading(World& world, float dt) {
+    auto& cbtPool = world.pool<CombatComponent>();
+    for (size_t i = 0; i < cbtPool.owners().size(); ++i) {
+        auto& cbt = cbtPool.data()[i];
+        if (!cbt.isReloading) continue;
+
+        cbt.reloadTimer -= dt;
+        if (cbt.reloadTimer <= 0.0f) {
+            cbt.isReloading = false;
+            cbt.reloadTimer = 0.0f;
+            
+            Entity e{cbtPool.owners()[i]};
+            auto* inv = world.tryGet<InventoryComponent>(e);
+            if (!inv) continue;
+            
+            Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
+            if (!w.isValid() || w.key != "pistol_9mm") continue;
+            
+            int magCapacity = 7;
+            int needed = magCapacity - w.quantity;
+            if (needed <= 0) continue;
+            
+            int consumed = 0;
+            for (int j = 0; j < INVENTORY_GRID_SLOTS && consumed < needed; ++j) {
+                if (inv->slots[j].isValid() && inv->slots[j].key == "ammo_9mm") {
+                    int take = std::min(needed - consumed, inv->slots[j].quantity);
+                    inv->slots[j].quantity -= take;
+                    consumed += take;
+                    if (inv->slots[j].quantity <= 0) {
+                        inv->removeItem(j);
+                    }
+                }
+            }
+            
+            w.quantity += consumed;
+            DZ_LOG_DEBUG("[Combat] Entity %u reloaded %d ammo. Current: %d", e.id, consumed, w.quantity);
+            
+            auto* net = world.tryGet<NetworkComponent>(e);
+            if (net) {
+                net->markDirty(DIRTY_HEALTH); // 상태 플래그 해제
+                net->markDirty(DIRTY_INVENTORY); // 탄약 갱신
             }
         }
     }

@@ -135,6 +135,7 @@ public:
     float       localMaxStamina() const noexcept { return m_localMaxStamina; }
     bool        localBleeding() const noexcept { return (m_localFlags & STATUS_BLEEDING) != 0; }
     bool        localOnFire()   const noexcept { return (m_localFlags & STATUS_ON_FIRE)  != 0; }
+    bool        localReloading()const noexcept { return (m_localFlags & STATUS_RELOADING)!= 0; }
     bool        isDead()          const noexcept { return m_localDead; }
     void        clearDead()       noexcept       { m_localDead = false; }
     bool        justSpawned()     const noexcept { return m_justSpawned; }

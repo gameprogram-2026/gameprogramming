@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+#include <algorithm>
 
 namespace dz {
 
@@ -14,12 +15,6 @@ namespace dz {
 // 맵 상수
 // ─────────────────────────────────────────────────────────────────────────────
 static const float TILE_SZ = 32.0f;
-static const std::vector<std::pair<float,float>> EXTRACTION_ZONE_POS = {
-    { 5*TILE_SZ,  5*TILE_SZ},
-    {74*TILE_SZ,  5*TILE_SZ},
-    { 5*TILE_SZ, 74*TILE_SZ},
-    {74*TILE_SZ, 74*TILE_SZ},
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Game constructor
@@ -31,7 +26,7 @@ Game::Game() {
     m_camera.screenW = 1280;
     m_camera.screenH = 720;
 
-    m_extractionZones = EXTRACTION_ZONE_POS;
+    // 탈출존은 맵 로드 후 loadExtractionZones()에서 동적 설정
 }
 
 Game::~Game() { shutdown(); }
@@ -45,6 +40,7 @@ void Game::tryInteract() {
     if (m_nearestInteractType == 3) { // REC_LOOT equivalent is 3
         m_net.sendLootPickup(static_cast<uint32_t>(m_nearestInteractNetID));
         m_audio.playSound("loot");
+        m_clientHiddenNetIDs.push_back(m_nearestInteractNetID); // 클라이언트 예측으로 즉시 숨김
         m_nearestInteractNetID = -1; 
     } else if (m_nearestInteractType == 2) { // REC_BUILDING equivalent is 2
         m_showCrafting = !m_showCrafting;
@@ -84,12 +80,26 @@ int Game::run(const std::string& serverHost, uint16_t port) {
         m_audio.loadSound("footstep", "assets/sounds/footstep.wav");
         m_audio.loadSound("shoot", "assets/sounds/shoot.wav");
         m_audio.loadSound("swing", "assets/sounds/swing.wav");
+        m_audio.loadSound("dry_fire", "assets/sounds/dry_fire.wav");
         m_audio.loadSound("hit", "assets/sounds/hit.wav");
         m_audio.loadSound("siren", "assets/sounds/siren.wav");
     }
 
     if (!m_map.loadFromJSON("data/map.json"))
         m_map = TileMap(80, 80);
+
+    // 탈출존을 map.json에서 파싱된 값으로 동기화 (서버와 좌표 일치)
+    m_extractionZones.clear();
+    for (const auto& ez : m_map.getExtractionZones()) {
+        float cx = (ez.tileX + ez.w * 0.5f) * TILE_SZ;
+        float cy = (ez.tileY + ez.h * 0.5f) * TILE_SZ;
+        m_extractionZones.push_back({cx, cy});
+    }
+    if (m_extractionZones.empty()) {
+        // fallback: 맵 중앙 2곳
+        m_extractionZones.push_back({80 * TILE_SZ, 80 * TILE_SZ});
+        m_extractionZones.push_back({120 * TILE_SZ, 120 * TILE_SZ});
+    }
 
     // 건물 외벽을 TileMap SOLID 타일로 마킹 (서버와 동일한 공유 함수 사용)
     applyBuildingCollisions(m_map);
@@ -186,7 +196,8 @@ void Game::runLogin() {
             if (quitBtn.hit(cx, cy)) { m_running = false; break; }
         }
 
-        // SDL_Delay(16); removed to rely on VSync
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 }
 
@@ -252,7 +263,8 @@ void Game::runLobby() {
 
         processInventoryMouse(); // Handles drag and drop in stash/inventory
 
-        // SDL_Delay(16); removed to rely on VSync
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 }
 
@@ -296,7 +308,8 @@ void Game::runMatchmaking() {
         m_renderer.drawMatchmaking(m_matchmakingTimer);
         m_renderer.endFrame();
 
-        // SDL_Delay(16); removed to rely on VSync
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 }
 
@@ -362,7 +375,8 @@ void Game::runConnecting() {
         m_renderer.drawMatchmaking(m_matchmakingTimer + 3.0f); // 매칭 화면 유지
         m_renderer.endFrame();
 
-        // SDL_Delay(16); removed to rely on VSync
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 
     // 타임아웃
@@ -389,12 +403,13 @@ void Game::runMapLoading() {
             if (e.type == SDL_QUIT) { m_running = false; return; }
         }
 
+        m_net.update(dt); // 로딩 중에도 서버로부터 ConnectAck(새 위치, HP) 수신 및 처리
+
         // 맵 로딩 진행도 (가짜 로딩, 약 2초)
         float progress = m_mapLoadingTimer / 2.0f;
         if (progress >= 1.0f) {
             m_extractCountdown = 300.0f;
             m_zonesOpen        = false;
-            m_inventory        = ClientInventory{};
 
             m_camera.x = m_net.localX();
             m_camera.y = m_net.localY();
@@ -408,7 +423,8 @@ void Game::runMapLoading() {
         m_renderer.drawMapLoading(progress);
         m_renderer.endFrame();
 
-        // SDL_Delay(16); removed to rely on VSync
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 }
 
@@ -427,14 +443,14 @@ void Game::runIngame() {
         if (dt > 0.05f) dt = 0.05f;
 
         processEvents();
-        update(dt);
 
         if (!m_net.isAuthenticated()) {
-            m_showDisconnectPopup = true;
-            // 계속 루프를 돌면서 팝업만 표시 (입력/업데이트 중단)
-            m_curInput.moveX = 0; m_curInput.moveY = 0;
-            m_curInput.actions = 0;
+            m_statusMsg = "서버와 연결이 끊겼습니다.";
+            m_state = GameState::Login;
+            return; // 즉시 로컬 게임 진행 중지 및 로비 복귀
         }
+
+        update(dt);
 
         renderIngame();
 
@@ -451,6 +467,9 @@ void Game::runIngame() {
                 return;
             }
         }
+
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 }
 
@@ -480,9 +499,12 @@ void Game::runDead() {
         m_deathTimer -= dt;
 
         if (m_deathTimer <= 0.0f) {
-            // 인벤토리 초기화 (아이템 손실) 및 로컬 상태 정리
+            // 인벤토리 중 장비/소지품만 초기화 (창고는 유지)
             m_net.clearLocalNetID();
-            m_inventory  = ClientInventory{};
+            for (auto& slot : m_inventory.gridSlots) slot = {};
+            m_inventory.primaryWeapon = {};
+            m_inventory.secondaryWeapon = {};
+            m_inventory.usedSlots = 0;
             m_state      = GameState::Lobby;
             m_statusMsg  = "사망 — 모든 아이템을 잃고 로비로 돌아왔습니다.";
             return;
@@ -507,7 +529,8 @@ void Game::runDead() {
         m_renderer.drawDeathScreen(m_deathTimer, m_net.getDeathCause());
         m_renderer.endFrame();
 
-        // SDL_Delay(16); removed to rely on VSync
+        // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
+        SDL_Delay(1);
     }
 }
 
@@ -783,24 +806,34 @@ void Game::processEvents() {
     }
 
     if (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) {
-        if (m_attackTimer <= 0.0f) { 
-            m_attackTimer = 0.35f; 
-            m_attackAngle = m_curInput.aimAngle; 
-            
-            // 무기 종류에 따른 사운드 분기
-            const auto& wpn = m_inventory.primaryWeapon;
-            bool isGun = (wpn.isValid() && (wpn.name.find("pistol") != std::string::npos || wpn.name.find("rifle") != std::string::npos || wpn.name.find("shotgun") != std::string::npos));
-            if (isGun) {
-                m_audio.playSound("shoot", 0.7f);
-                m_cameraShakeTimer = 0.15f;
-                m_cameraShakeIntensity = 6.0f;
-                m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
-                m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
-            } else {
-                m_audio.playSound("swing", 0.8f);
-                m_cameraShakeTimer = 0.1f;
-                m_cameraShakeIntensity = 3.0f;
-                m_renderer.spawnMeleeArc(m_net.localX(), m_net.localY(), m_attackAngle);
+        const auto& wpn = m_inventory.primaryWeapon;
+        if (!wpn.isValid() || !ClientInventory::isWeaponItem(wpn.name)) {
+            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+        } else {
+            bool isGun = (wpn.name == "pistol_9mm"); // 현재 구현된 유일한 총기
+            if (isGun && wpn.qty <= 0) {
+                // 잔탄 부족
+                m_curInput.actions &= ~ACT_SHOOT;
+                if (m_attackTimer <= 0.0f) {
+                    m_attackTimer = 0.35f;
+                    m_audio.playSound("dry_fire", 0.6f);
+                }
+            } else if (m_attackTimer <= 0.0f) { 
+                m_attackTimer = 0.35f; 
+                m_attackAngle = m_curInput.aimAngle; 
+                
+                if (isGun) {
+                    m_audio.playSound("shoot", 0.7f);
+                    m_cameraShakeTimer = 0.15f;
+                    m_cameraShakeIntensity = 6.0f;
+                    m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
+                    m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
+                } else {
+                    m_audio.playSound("swing", 0.8f);
+                    m_cameraShakeTimer = 0.1f;
+                    m_cameraShakeIntensity = 3.0f;
+                    m_renderer.spawnMeleeArc(m_net.localX(), m_net.localY(), m_attackAngle);
+                }
             }
         }
     }
@@ -1060,6 +1093,9 @@ void Game::renderIngame() {
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
         if (rem.recType == 3 || rem.recType == 2) { // 3: REC_LOOT, 2: REC_BUILDING
+            if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), rem.entityID) != m_clientHiddenNetIDs.end()) {
+                continue; // 클라이언트가 이미 주운 아이템
+            }
             LootBoxView v;
             v.wx = rem.snap[1].x;
             v.wy = rem.snap[1].y;
@@ -1078,8 +1114,21 @@ void Game::renderIngame() {
     bool  bleeding = m_net.localBleeding();
     bool  onFire   = m_net.localOnFire();
     int   teamID   = m_net.localTeam();
-    const std::string& wName  = m_inventory.primaryWeapon.isValid()
-                                  ? m_inventory.primaryWeapon.name  : "";
+    std::string wName;
+    if (m_inventory.primaryWeapon.isValid()) {
+        wName = m_inventory.primaryWeapon.name;
+        if (m_inventory.primaryWeapon.name == "pistol_9mm") {
+            int reserve = 0;
+            for (const auto& slot : m_inventory.gridSlots) {
+                if (slot.isValid() && slot.name == "ammo_9mm") reserve += slot.qty;
+            }
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), " (%d / %d)", m_inventory.primaryWeapon.qty, reserve);
+            wName += buf;
+        }
+    } else {
+        wName = "";
+    }
     const std::string& wGrade = m_inventory.primaryWeapon.isValid()
                                   ? m_inventory.primaryWeapon.grade : "normal";
     m_renderer.drawWorldEntities(m_net, m_camera, &m_map, views,
@@ -1116,10 +1165,10 @@ void Game::renderIngame() {
                        extractProg, teamID,
                        m_extractCountdown, teamNames[tidx],
                        wName, wGrade,
-                       teamAlive, m_net.allianceBits(), m_net.gameTime());
+                       teamAlive, m_net.allianceBits(), m_net.gameTime(), m_net.localReloading());
 
-    // 7. 미니맵
-    m_renderer.drawMinimap(m_net, m_net.localX(), m_net.localY(), teamID);
+    // ── HUD 및 미니맵 ────────────────────────────────────────────────────────
+    m_renderer.drawMinimap(m_map, m_net, m_net.localX(), m_net.localY(), teamID, m_extractionZones);
 
     // 7-b. 건설 모드 오버레이
     {
@@ -1158,10 +1207,8 @@ void Game::renderIngame() {
             m_notifyMsg = "조합 요청 전송 중...";
             m_notifyTimer = 1.5f;
         }
-    }
-
-    if (m_showFullMap) {
-        m_renderer.drawFullMap(m_map, m_net, m_net.localX(), m_net.localY(), teamID);
+    } else if (m_showFullMap) {
+        m_renderer.drawFullMap(m_map, m_net, m_net.localX(), m_net.localY(), teamID, m_extractionZones);
     }
 
     if (m_showDisconnectPopup) {

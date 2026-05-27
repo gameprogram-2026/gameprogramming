@@ -56,6 +56,7 @@ private:
     void tickBleeding(World& world, float dt);
     void tickFireDamage(World& world, float dt);
     void tickStamina(World& world, float dt);
+    void tickReloading(World& world, float dt);
 
     DamageCallback m_onDamage;
     DeathCallback  m_onDeath;

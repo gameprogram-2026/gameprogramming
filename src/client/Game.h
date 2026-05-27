@@ -96,6 +96,7 @@ private:
     // 파밍 및 상호작용
     int     m_nearestInteractNetID = -1;
     uint8_t m_nearestInteractType  = 0; // 0=None, 1=Loot, 2=Building
+    std::vector<int> m_clientHiddenNetIDs; // 줍기 성공 후 즉시 숨길 아이템들
 
     // 인벤토리 & UI 상태
     ClientInventory m_inventory;

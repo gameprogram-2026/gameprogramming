@@ -429,6 +429,7 @@ void NetworkClient::processSnapshot(const uint8_t* data, size_t len) {
         if (rec.entityID == static_cast<uint16_t>(m_localNetID)) {
             // ── Reconcile our own entity ──────────────────────────────────────
             // HP는 S2C_DamageEvent / S2C_DeathEvent 패킷으로 추적
+            m_localFlags = rec.statusFlags;
             reconcile(rec.seqAck, rec.x, rec.y);
         } else {
             // ── Update remote interpolation buffer ────────────────────────────

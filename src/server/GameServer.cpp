@@ -226,10 +226,11 @@ void GameServer::tick(float dt) {
         m_noise.addEvent(0, 0, 9999.0f, 4, 1.0f); 
     } else if (!isNight && m_wasNight) {
         m_wasNight = false;
-        DZ_LOG_INFO("[Server] Day breaks! Cleaning up excess zombies.");
-        // 낮이 되면 야외에 있는 잔여 웨이브 좀비들을 정리하여 안전 구역을 확보 (최대 15마리만 유지)
-        // 건물 내부에 있는 좀비들은 햇빛을 피해 살아남습니다.
-        int zCount = 0;
+        DZ_LOG_INFO("[Server] Day breaks! Outdoor zombies will start melting.");
+    }
+
+    // 낮 시간(Daytime) 동안 야외에 있는 좀비에게 햇빛 데미지 지속 부여 (초당 20)
+    if (!isNight) {
         for (EntityID id : m_world.alive()) {
             Entity e{id};
             if (m_world.tryGet<ZombieAIComponent>(e) && m_world.tryGet<HealthComponent>(e)->isAlive) {
@@ -247,15 +248,9 @@ void GameServer::tick(float dt) {
                 }
                 
                 // 건물 내부 좀비는 살려둠
-                if (inBuilding) {
-                    continue;
-                }
-
-                // 야외 좀비는 15마리까지만 남기고 소멸(햇빛에 녹음)
-                if (zCount > 15) {
-                    m_world.destroyEntity(e);
-                } else {
-                    zCount++;
+                if (!inBuilding) {
+                    // CombatSystem을 통해 applyDamage → onDeath 콜백 정상 발동
+                    m_combat.applyDamage(m_world, e, Entity{}, 20.0f * dt, DamageType::Fire, nullptr);
                 }
             }
         }
@@ -292,6 +287,20 @@ void GameServer::tick(float dt) {
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::sendSnapshots() {
     m_net.broadcastSnapshot(m_world, static_cast<uint16_t>(m_tick));
+
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (net && net->ownerID != 0xFFFF) { // player
+            if (net->isDirty(DIRTY_INVENTORY)) {
+                sendInventorySyncToPeer(net->ownerID);
+            }
+            if (net->isDirty(DIRTY_HEALTH)) {
+                sendHpSyncToPeer(net->ownerID);
+            }
+            net->clearDirty();
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -521,7 +530,9 @@ void GameServer::onClientDisconnect(uint32_t peerIdx) {
                 }
             }
             m_world.destroyEntity(e);
-            m_activePlayers--;
+            // 이미 사망(onDeath에서 감소됨)한 경우 중복 감소 방지
+            auto* hp = m_world.tryGet<HealthComponent>(e);
+            if (!hp || hp->isAlive) m_activePlayers--;
             break;
         }
     }
@@ -607,10 +618,8 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
     auto* net = m_world.tryGet<NetworkComponent>(victim);
     if (net) {
         pkt.victimID = static_cast<uint16_t>(net->netID);
-        // 플레이어일 때만 m_activePlayers 감소
-        if (net->role == NetRole::LocallyOwned) {
-            m_activePlayers--;
-        }
+        // 플레이어일 때만 m_activePlayers 감소 (onExtracted/onClientDisconnect 에서 중복 감소 방지)
+        // onExtracted는 엔티티를 바로 파괴하므로 이 경로는 순수 전투사망 시만 실행됨
     }
     m_net.broadcastReliable(&pkt, sizeof(pkt));
 
@@ -625,6 +634,7 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
 
     // 플레이어 사망 → DB에 사망 기록 및 루트 드랍 후 엔티티 파괴
     if (net && net->role == NetRole::LocallyOwned) {
+        m_activePlayers--; // 전투 사망 시 감소
         for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
             if (m_net.isConnected(pi) &&
                 m_net.peer(pi).playerNetID == net->netID &&
@@ -638,9 +648,9 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
     // 사망 시 아이템 드랍
     onDeathLoot(victim);
 
-    // 만약 좀비가 죽었다면 30% 확률로 아이템 드랍
+    // 만약 좀비가 죽었다면 50% 확률로 아이템 드랍
     auto* ai = m_world.tryGet<ZombieAIComponent>(victim);
-    if (ai && (std::rand() % 100) < 30) {
+    if (ai && (std::rand() % 100) < 50) {
         Entity loot = m_world.createEntity();
         auto& lxf = m_world.addComponent<TransformComponent>(loot);
         auto* vxf = m_world.tryGet<TransformComponent>(victim);
@@ -650,10 +660,15 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
         Item item;
         item.itemID = 1000 + (std::rand() % 1000);
         item.quantity = 1;
-        if (std::rand() % 2 == 0) {
+        int r = std::rand() % 4;
+        if (r == 0) {
             item.key = "bandage"; item.category = ItemCategory::Consumable; item.weight = 0.3f;
+        } else if (r == 1) {
+            item.key = "9mm_ammo"; item.category = ItemCategory::Ammo; item.weight = 0.05f; item.quantity = 10;
+        } else if (r == 2) {
+            item.key = "medkit"; item.category = ItemCategory::Consumable; item.weight = 0.5f;
         } else {
-            item.key = "9mm_ammo"; item.category = ItemCategory::Ammo; item.weight = 0.05f; item.quantity = 5;
+            item.key = "scrap"; item.category = ItemCategory::BuildMaterial; item.weight = 0.2f; item.quantity = 3;
         }
         linv.addItem(item);
         
@@ -683,6 +698,11 @@ void GameServer::onExtracted(Entity player, uint8_t zoneID) {
             if (inv) m_db.saveAccount(uname, *inv);
             m_db.recordExtraction(uname);
         }
+        // 로비 인벤토리 동기화 (다음 매치 진입 시 탈출한 템 유지)
+        auto* inv = m_world.tryGet<InventoryComponent>(player);
+        if (inv && m_lobbyPlayers.find(net->ownerID) != m_lobbyPlayers.end()) {
+            m_lobbyPlayers[net->ownerID].inv = *inv;
+        }
     }
 
     m_world.destroyEntity(player);
@@ -694,29 +714,40 @@ void GameServer::onDeathLoot(Entity player) {
     auto* xf  = m_world.tryGet<TransformComponent>(player);
     if (!inv || !xf) return;
 
-    for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
-        if (!inv->slots[i].isValid()) continue;
-
+    auto dropItem = [&](const Item& item) {
+        if (!item.isValid()) return;
         Entity loot = m_world.createEntity();
-
         float ox = static_cast<float>((std::rand() % 48) - 24);
         float oy = static_cast<float>((std::rand() % 48) - 24);
-
         auto& lxf = m_world.addComponent<TransformComponent>(loot);
         lxf.x = xf->x + ox;
         lxf.y = xf->y + oy;
-
         auto& linv = m_world.addComponent<InventoryComponent>(loot);
-        linv.addItem(inv->slots[i]);
-
+        linv.addItem(item);
         auto& lnet = m_world.addComponent<NetworkComponent>(loot);
         lnet.netID  = m_nextPlayerNetID++;
         lnet.role   = NetRole::ServerAuth;
         lnet.markDirty(DIRTY_TRANSFORM);
-
+        lnet.markDirty(DIRTY_INVENTORY); // 아이템 내용도 클라이언트에 전송
         DZ_LOG_INFO("[Death] LootEntity %u spawned: %s x%d at (%.0f,%.0f)",
-            lnet.netID, inv->slots[i].key.c_str(), inv->slots[i].quantity, lxf.x, lxf.y);
+            lnet.netID, item.key.c_str(), item.quantity, lxf.x, lxf.y);
+    };
+
+    for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
+        if (!inv->slots[i].isValid()) continue;
+        dropItem(inv->slots[i]);
         inv->removeItem(i);
+    }
+
+    dropItem(inv->equipped[0]);
+    inv->equipped[0] = {}; // PrimaryWeapon
+    dropItem(inv->equipped[1]);
+    inv->equipped[1] = {}; // SecondaryWeapon
+    inv->usedSlots = 0;
+
+    auto* net = m_world.tryGet<NetworkComponent>(player);
+    if (net && m_lobbyPlayers.find(net->ownerID) != m_lobbyPlayers.end()) {
+        m_lobbyPlayers[net->ownerID].inv = *inv;
     }
 }
 
@@ -780,30 +811,19 @@ bool GameServer::loadMap(const std::string& path) {
 void GameServer::spawnZombies() {
     // 모든 위치는 건물 외부 개방 공간에 배치 (applyBuildingCollisions 충돌 없음)
     struct ZSpawn { float x, y; ZombieType type; float hp; };
-    static const ZSpawn spawns[] = {
-        // ── 구역A 좌측 도로 ──────────────────────────────────────────────────
-        { 3*32.f, 10*32.f, ZombieType::Shambler, 60.f},
-        {16*32.f,  3*32.f, ZombieType::Shambler, 60.f},
-        { 3*32.f, 28*32.f, ZombieType::Runner,   40.f},
-
-        // ── 구역A 우측 ───────────────────────────────────────────────────────
-        {20*32.f, 28*32.f, ZombieType::Shambler, 60.f},
-        {35*32.f, 20*32.f, ZombieType::Runner,   40.f},
-
-        // ── 구역B 외곽 (쇼핑몰) ─────────────────────────────────────────────
-        {33*32.f, 38*32.f, ZombieType::Shambler, 60.f},
-        {58*32.f, 34*32.f, ZombieType::Shambler, 60.f},
-        {33*32.f, 55*32.f, ZombieType::Runner,   40.f},
-        {58*32.f, 56*32.f, ZombieType::Brute,   200.f},
-        {40*32.f, 30*32.f, ZombieType::Shambler, 60.f},
-        {57*32.f, 32*32.f, ZombieType::Runner,   40.f},
-
-        // ── 구역C 외곽 (산업단지) ────────────────────────────────────────────
-        {56*32.f, 58*32.f, ZombieType::Shambler, 60.f},
-        {72*32.f, 56*32.f, ZombieType::Shambler, 60.f},
-        {56*32.f, 66*32.f, ZombieType::Runner,   40.f},
-        {72*32.f, 74*32.f, ZombieType::Brute,   200.f},
-    };
+    std::vector<ZSpawn> spawns;
+    
+    // 파밍 지역(건물 내부) 위주로 스폰 (안전 지역 확보)
+    const auto& bds = m_map.getBuildings();
+    if (!bds.empty()) {
+        for (int i = 0; i < 15; ++i) { // 낮 좀비는 15마리만 실내 스폰 (개체수 대폭 축소)
+            const auto& bd = bds[std::rand() % bds.size()];
+            float bx = (bd.x + 1 + (std::rand() % std::max(1, bd.w - 2))) * TILE_SIZE;
+            float by = (bd.y + 1 + (std::rand() % std::max(1, bd.h - 2))) * TILE_SIZE;
+            ZombieType type = (std::rand() % 10 < 2) ? ZombieType::Runner : ZombieType::Shambler;
+            spawns.push_back({bx, by, type, type == ZombieType::Runner ? 40.f : 60.f});
+        }
+    }
 
     // 현재 살아있는 좀비들의 위치를 미리 수집
     std::vector<std::pair<float,float>> livingZombiePositions;
@@ -914,6 +934,7 @@ void GameServer::sendHpSyncToPeer(uint32_t peerIdx) {
         if (!hp->isAlive)      flags |= STATUS_DEAD;
         if (cbt && cbt->isBleeding) flags |= STATUS_BLEEDING;
         if (cbt && cbt->isOnFire)   flags |= STATUS_ON_FIRE;
+        if (cbt && cbt->isReloading) flags |= STATUS_RELOADING;
 
         m_net.sendHpSync(peerIdx,
                          static_cast<uint16_t>(net->netID),
@@ -994,8 +1015,10 @@ void GameServer::spawnNightWave() {
         // 플레이어 반경 600~800 픽셀 위치에서 스폰 (화면 밖)
         float angle = static_cast<float>(std::rand() % 360) * 3.14159f / 180.0f;
         float dist  = 600.0f + static_cast<float>(std::rand() % 200);
-        float sx = txf->x + std::cos(angle) * dist;
-        float sy = txf->y + std::sin(angle) * dist;
+        // 맵 경계 클램핑 (200x200 타일 = 6400px)
+        float mapMax = 199.0f * 32.0f;
+        float sx = std::max(32.0f, std::min(txf->x + std::cos(angle) * dist, mapMax));
+        float sy = std::max(32.0f, std::min(txf->y + std::sin(angle) * dist, mapMax));
 
         Entity z = m_world.createEntity();
         auto& zxf = m_world.addComponent<TransformComponent>(z);
@@ -1029,7 +1052,46 @@ void GameServer::spawnNightWave() {
 // onLootPickupReq
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID) {
-    if (m_logic) m_logic->handleLootPickup(peerIdx, lootNetID);
+    if (m_logic) {
+        m_logic->handleLootPickup(peerIdx, lootNetID);
+        sendInventorySyncToPeer(peerIdx);
+    }
+}
+
+void GameServer::sendInventorySyncToPeer(uint32_t peerIdx) {
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (net && net->ownerID == peerIdx) {
+            auto* inv = m_world.tryGet<InventoryComponent>(e);
+            if (inv) {
+                InventorySyncPacket syncPkt{};
+                syncPkt.packetType = static_cast<uint8_t>(PacketType::S2C_InventorySync);
+                syncPkt.money = inv->money;
+                syncPkt.usedSlots = static_cast<uint8_t>(inv->usedSlots);
+                for (int i=0; i<INVENTORY_GRID_SLOTS; ++i) {
+                    if (inv->slots[i].isValid()) {
+                        syncPkt.gridSlots[i].itemID = inv->slots[i].itemID;
+                        std::strncpy(syncPkt.gridSlots[i].key, inv->slots[i].key.c_str(), 19);
+                        syncPkt.gridSlots[i].category = static_cast<uint8_t>(inv->slots[i].category);
+                        syncPkt.gridSlots[i].quantity = inv->slots[i].quantity;
+                        syncPkt.gridSlots[i].weight = inv->slots[i].weight;
+                    }
+                }
+                for (int i=0; i<EQUIPMENT_SLOT_COUNT; ++i) {
+                    if (inv->equipped[i].isValid()) {
+                        syncPkt.equipped[i].itemID = inv->equipped[i].itemID;
+                        std::strncpy(syncPkt.equipped[i].key, inv->equipped[i].key.c_str(), 19);
+                        syncPkt.equipped[i].category = static_cast<uint8_t>(inv->equipped[i].category);
+                        syncPkt.equipped[i].quantity = inv->equipped[i].quantity;
+                        syncPkt.equipped[i].weight = inv->equipped[i].weight;
+                    }
+                }
+                m_net.sendReliable(peerIdx, &syncPkt, sizeof(syncPkt));
+                return;
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

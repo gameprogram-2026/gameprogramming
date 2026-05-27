@@ -180,15 +180,16 @@ public:
                  const std::string& weaponGrade = "normal",
                  const int teamAlive[4] = nullptr,   ///< 팀1~4 생존 인원 (nullptr=미표시)
                  uint8_t allianceBits  = 0,          ///< 연합 비트맵
-                 float gameTime = 0.0f);             ///< 서버 진행 시간 (초)
+                 float gameTime = 0.0f,              ///< 서버 진행 시간 (초)
+                 bool isReloading = false);          ///< 장전 중 여부
 
     void drawBuildModeOverlay(bool active, int buildType, int mouseX, int mouseY,
                               const Camera& cam);
     void drawExtractionZones(const Camera& cam,
                              const std::vector<std::pair<float,float>>& zones,
                              bool open);
-    void drawMinimap(const NetworkClient& net, float lx, float ly, int teamID);
-    void drawFullMap(const class TileMap& map, const NetworkClient& net, float lx, float ly, int teamID);
+    void drawMinimap(const class TileMap& map, const NetworkClient& net, float lx, float ly, int teamID, const std::vector<std::pair<float,float>>& zones);
+    void drawFullMap(const class TileMap& map, const NetworkClient& net, float lx, float ly, int teamID, const std::vector<std::pair<float,float>>& zones);
     void drawDisconnectPopup(int mouseX, int mouseY, bool& outClickedOK);
 
     /// dragItem: 드래그 중인 아이템 (nullptr이면 드래그 없음)

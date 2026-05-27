@@ -1300,13 +1300,6 @@ void Renderer::drawLocalPlayer(float wx, float wy, float angle, float hpPct,
 void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam, float gameTime) {
     if (!m_fowTexture) return;
 
-    int px, py;
-    cam.worldToScreen(wx, wy, px, py);
-
-    // ── 1. FOW 텍스처에 렌더링 ─────────────────────────────────────────────
-    SDL_SetRenderTarget(m_renderer, m_fowTexture);
-    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
-
     // 밤/낮에 따른 안개 색상과 농도
     float timeOfDay = std::fmod(gameTime, 180.0f);
     bool isNight = timeOfDay > 120.0f;
@@ -1323,6 +1316,13 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
         // 완전한 낮이면 시야 제한(안개)을 아예 그리지 않음
         return;
     }
+
+    int px, py;
+    cam.worldToScreen(wx, wy, px, py);
+
+    // ── 1. FOW 텍스처에 렌더링 ─────────────────────────────────────────────
+    SDL_SetRenderTarget(m_renderer, m_fowTexture);
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
 
     uint8_t fogAlpha = static_cast<uint8_t>(darkness * 245.0f); // 밤 최고 농도 245
     uint8_t r = static_cast<uint8_t>(darkness * 10.0f);
@@ -1560,18 +1560,47 @@ void Renderer::drawWorldEntities(const NetworkClient& net, const Camera& cam,
     std::sort(list.begin(), list.end(),
               [](const Entry& a, const Entry& b){ return a.wy < b.wy; });
 
+    // ── 지붕 은폐 헬퍼: 엔티티가 어느 건물 안에 있는지 반환 (-1 = 야외) ──────
+    auto getBuildingIdx = [&](float wx, float wy) -> int {
+        if (!map) return -1;
+        int tx = static_cast<int>(wx / TILE_SIZE);
+        int ty = static_cast<int>(wy / TILE_SIZE);
+        const auto& bldgs = map->getBuildings();
+        for (int bi = 0; bi < static_cast<int>(bldgs.size()); ++bi) {
+            const auto& b = bldgs[bi];
+            if (tx >= b.x && tx < b.x + b.w && ty >= b.y && ty < b.y + b.h)
+                return bi;
+        }
+        return -1;
+    };
+    int localBuildingIdx = getBuildingIdx(localX, localY);
+
     for (const auto& e : list) {
         if (e.type == EntryType::LocalPlayer) {
             drawLocalPlayer(localX, localY, aimAngle, hpPct, bleeding,
                             teamID, cam, wName, wGrade, attackTimer, attackAngle);
         } else if (e.type == EntryType::RemoteEntity) {
-            drawRemoteEntity(this, m_renderer, nullptr, net.remotes()[e.idx], cam);
+            const auto& rem = net.remotes()[e.idx];
+            float t  = std::min(1.0f, rem.interpT / std::max(rem.snapDt, 0.001f));
+            float wx = rem.snap[0].x + (rem.snap[1].x - rem.snap[0].x) * t;
+            float wy = rem.snap[0].y + (rem.snap[1].y - rem.snap[0].y) * t;
+            // 지붕 은폐: 좀비가 건물 안에 있으면 로컬 플레이어도 같은 건물 안에 있어야 표시
+            if (rem.recType == REC_ZOMBIE) {
+                int zi = getBuildingIdx(wx, wy);
+                if (zi >= 0 && zi != localBuildingIdx) continue; // 다른 건물 안 = 숨김
+            }
+            drawRemoteEntity(this, m_renderer, nullptr, rem, cam);
         } else if (e.type == EntryType::LootBox) {
-            drawLootBox(lootBoxes[e.idx], cam);
+            const auto& box = lootBoxes[e.idx];
+            // 지붕 은폐: 루트박스가 건물 안에 있으면 로컬 플레이어도 같은 건물 안이어야 표시
+            int li = getBuildingIdx(box.wx, box.wy);
+            if (li >= 0 && li != localBuildingIdx) continue; // 다른 건물 안 = 숨김
+            drawLootBox(box, cam);
         } else if (e.type == EntryType::BuildingOverlay && map) {
             drawBuildingOverlay(map->getBuildings()[e.idx], cam);
         }
     }
+
 
     // ── 포탑 총알 트레이서 렌더링 (가장 위에 오버레이) ──────────────────────────────────
     for (const auto& beam : net.turretBeams()) {
@@ -1638,7 +1667,8 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
                         const std::string& weaponGrade,
                         const int teamAlive[4],
                         uint8_t allianceBits,
-                        float gameTime) {
+                        float gameTime,
+                        bool isReloading) {
     TTF_Font* fTiny = m_fonts.get(11);
     TTF_Font* fSm   = m_fonts.get(13);
     TTF_Font* fMd   = m_fonts.get(16);
@@ -1987,6 +2017,36 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
         SDL_SetRenderDrawColor(m_renderer, cc.r, cc.g, cc.b, 80);
         SDL_RenderDrawRect(m_renderer, &eBg);
         drawText(buf, m_screenW / 2, 57, cc, fMono, true);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // 장전 중 표시 — 화면 중앙 하단
+    // ══════════════════════════════════════════════════════════════
+    if (isReloading) {
+        int rw = 120, rh = 12;
+        int rx = m_screenW / 2 - rw / 2;
+        int ry = m_screenH / 2 + 60;
+        
+        // 배경 패널
+        SDL_SetRenderDrawColor(m_renderer, 10, 15, 25, 200);
+        SDL_Rect rBg = {rx - 10, ry - 20, rw + 20, rh + 26};
+        SDL_RenderFillRect(m_renderer, &rBg);
+        
+        float blink = std::sin(ticks * 0.015f) * 0.5f + 0.5f;
+        uint8_t ba = static_cast<uint8_t>(150 + 105 * blink);
+        drawText("RELOADING...", m_screenW / 2, ry - 10, {200, 200, 200, ba}, fSm, true);
+        
+        // 게이지 (단순 점멸)
+        SDL_SetRenderDrawColor(m_renderer, 40, 50, 60, 255);
+        SDL_Rect barBg = {rx, ry + 4, rw, rh};
+        SDL_RenderFillRect(m_renderer, &barBg);
+        
+        SDL_SetRenderDrawColor(m_renderer, 150, 180, 200, ba);
+        SDL_Rect barFill = {rx, ry + 4, static_cast<int>(rw * blink), rh};
+        SDL_RenderFillRect(m_renderer, &barFill);
+        
+        SDL_SetRenderDrawColor(m_renderer, 100, 120, 140, 200);
+        SDL_RenderDrawRect(m_renderer, &barBg);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -2629,11 +2689,11 @@ void Renderer::drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY
 // ─────────────────────────────────────────────────────────────────────────────
 // 미니맵
 // ─────────────────────────────────────────────────────────────────────────────
-void Renderer::drawMinimap(const NetworkClient& net, float lx, float ly, int teamID) {
+void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float lx, float ly, int teamID, const std::vector<std::pair<float,float>>& zones) {
     const int MM  = 160;
     const int MMX = m_screenW - MM - 14;
     const int MMY = 14;
-    const float MW = 80 * 32.0f;
+    const float MW = map.width() * 32.0f;
 
     // 외곽 테두리 + 배경
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
@@ -2642,12 +2702,12 @@ void Renderer::drawMinimap(const NetworkClient& net, float lx, float ly, int tea
     // 구역별 배경색
     // A: 주거 (좌상), B: 상업 (우중), C: 공업 (우하)
     struct ZoneColor { float x1, y1, x2, y2; SDL_Color col; };
-    static const ZoneColor zones[] = {
+    static const ZoneColor bgZones[] = {
         {0.0f, 0.0f, 0.43f, 0.43f, {80,  65,  20,  45}},   // A 주거
         {0.43f,0.43f,0.73f, 0.73f, {20,  40,  80,  45}},   // B 상업
         {0.68f,0.65f,1.0f,  1.0f,  {30,  50,  30,  45}},   // C 공업
     };
-    for (auto& z : zones) {
+    for (auto& z : bgZones) {
         SDL_SetRenderDrawColor(m_renderer, z.col.r, z.col.g, z.col.b, z.col.a);
         SDL_Rect r = {
             MMX + static_cast<int>(z.x1 * MM),
@@ -2675,10 +2735,16 @@ void Renderer::drawMinimap(const NetworkClient& net, float lx, float ly, int tea
     // 탈출 구역 (pulsing)
     float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() * 0.004f);
     uint8_t extA = static_cast<uint8_t>(120 + 100 * pulse);
-    // 맵 중앙에서 랜덤 탈출구이므로 대략적으로 표시 (실제 위치는 서버만 앎)
-    // 미니맵에는 추정 위치를 보여주거나 건물 위치 기반으로 표시
-    for (int i = 0; i < net.remoteCount(); ++i) {
-        // extraction zone은 별도 전달이 필요 — 현재는 미니맵에서 생략
+    for (const auto& z : zones) {
+        int epx, epy;
+        toMM(z.first, z.second, epx, epy);
+        drawFilledCircle(epx, epy, 6, {50, 220, 50, static_cast<uint8_t>(60 + 40 * pulse)});
+        SDL_SetRenderDrawColor(m_renderer, 50, 220, 50, extA);
+        for (int a = 0; a < 360; a += 15) {
+            float rad = a * 3.14159f / 180.f;
+            SDL_RenderDrawPoint(m_renderer, epx + static_cast<int>(std::cos(rad) * 6),
+                                            epy + static_cast<int>(std::sin(rad) * 6));
+        }
     }
 
     // 원격 엔티티들 (좀비 / 플레이어)
@@ -2693,9 +2759,8 @@ void Renderer::drawMinimap(const NetworkClient& net, float lx, float ly, int tea
             SDL_Rect dot = {px - 1, py - 1, 3, 3};
             SDL_RenderFillRect(m_renderer, &dot);
         } else {
-            // 다른 플레이어 — 팀 색으로
-            SDL_Color tc = Col::TEAM[std::max(0, std::min(4, teamID))];
-            drawFilledCircle(px, py, 3, {tc.r, tc.g, tc.b, 220});
+            // 다른 플레이어 — 주황색 점 (팀 기능 완벽 지원 전까지는 모두 적으로 표시)
+            drawFilledCircle(px, py, 3, {255, 120, 30, 220});
         }
     }
 
@@ -2715,7 +2780,7 @@ void Renderer::drawMinimap(const NetworkClient& net, float lx, float ly, int tea
     drawText("MAP  [M] 전체 지도", MMX + MM / 2, MMY + MM + 4, {140, 150, 180, 200}, m_fonts.get(10), true);
 }
 
-void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float lx, float ly, int teamID) {
+void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float lx, float ly, int teamID, const std::vector<std::pair<float,float>>& zones) {
     const int W = std::min(820, m_screenW - 60);
     const int H = std::min(820, m_screenH - 60);
     const int X = (m_screenW - W) / 2;
@@ -2803,11 +2868,9 @@ void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float l
     // ── 탈출 구역 표시 ────────────────────────────────────────────────────────
     float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() * 0.004f);
     uint8_t extA = static_cast<uint8_t>(160 + 90 * pulse);
-    // 탈출구역은 서버에서만 알기 때문에 일단 맵 설명만 표시
-    // 실제 좌표는 S2C 패킷으로 받아야 함 — 현재는 레이블로 표시
-    {
+    for (const auto& z : zones) {
         int epx, epy;
-        toMap(MW * 0.5f, MH * 0.5f, epx, epy); // 대략 중앙
+        toMap(z.first, z.second, epx, epy);
         drawFilledCircle(epx, epy, 10, {50, 220, 50, static_cast<uint8_t>(60 + 40 * pulse)});
         SDL_SetRenderDrawColor(m_renderer, 50, 220, 50, extA);
         for (int a = 0; a < 360; a += 6) {
