@@ -40,7 +40,6 @@ void Game::tryInteract() {
     if (m_nearestInteractType == 3) { // REC_LOOT equivalent is 3
         m_net.sendLootPickup(static_cast<uint32_t>(m_nearestInteractNetID));
         m_audio.playSound("loot");
-        m_clientHiddenNetIDs.push_back(m_nearestInteractNetID); // 클라이언트 예측으로 즉시 숨김
         m_nearestInteractNetID = -1; 
     } else if (m_nearestInteractType == 2) { // REC_BUILDING equivalent is 2
         m_showCrafting = !m_showCrafting;
@@ -906,6 +905,8 @@ void Game::processEvents() {
 void Game::processInventorySync() {
     if (m_net.hasInventorySync()) {
         const auto& sync = m_net.getInventorySync();
+        InventoryItem prevPrimary = m_inventory.primaryWeapon;
+        InventoryItem prevSecondary = m_inventory.secondaryWeapon;
         // 보존할 것: 스태시 (서버에서만 보내줌)
         ClientInventory newInv{};
         for (int i=0; i<40; ++i) newInv.stashSlots[i] = m_inventory.stashSlots[i];
@@ -933,6 +934,14 @@ void Game::processInventorySync() {
                 if (i == 0) newInv.primaryWeapon = eq;
                 if (i == 1) newInv.secondaryWeapon = eq;
             }
+        }
+        auto sameItem = [](const InventoryItem& a, const InventoryItem& b) {
+            return a.name == b.name && a.qty == b.qty && a.weight == b.weight;
+        };
+        if (prevPrimary.isValid() && prevSecondary.isValid() &&
+            sameItem(prevPrimary, newInv.secondaryWeapon) &&
+            sameItem(prevSecondary, newInv.primaryWeapon)) {
+            std::swap(newInv.primaryWeapon, newInv.secondaryWeapon);
         }
         newInv.totalWeight = totalW;
         m_inventory = newInv;
@@ -1055,25 +1064,37 @@ void Game::update(float dt) {
     }
 
     // 가장 가까운 파밍/상호작용 박스 탐색 (F키 힌트용)
-    const float INTERACT_RANGE = 48.0f;  // 픽셀 단위 (world)
+    const float INTERACT_RANGE = 96.0f;  // 서버 파밍 허용 거리와 동일
     float lx = m_net.localX();
     float ly = m_net.localY();
-    float bestDist = INTERACT_RANGE * INTERACT_RANGE;
+    float bestLootDist = INTERACT_RANGE * INTERACT_RANGE;
+    float bestBuildingDist = INTERACT_RANGE * INTERACT_RANGE;
+    int bestBuildingNetID = -1;
     m_nearestInteractNetID = -1;
     m_nearestInteractType = 0;
 
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
-        if (rem.recType == 3 || rem.recType == 2) { // 3: REC_LOOT, 2: REC_BUILDING
-            float dx = rem.snap[1].x - lx;
-            float dy = rem.snap[1].y - ly;
-            float d2 = dx*dx + dy*dy;
-            if (d2 < bestDist) {
-                bestDist = d2;
+        float dx = rem.snap[1].x - lx;
+        float dy = rem.snap[1].y - ly;
+        float d2 = dx*dx + dy*dy;
+        if (rem.recType == 3) { // REC_LOOT
+            if (d2 < bestLootDist) {
+                bestLootDist = d2;
                 m_nearestInteractNetID = rem.entityID;
                 m_nearestInteractType  = rem.recType;
             }
+        } else if (rem.recType == 2) { // REC_BUILDING
+            if (d2 < bestBuildingDist) {
+                bestBuildingDist = d2;
+                bestBuildingNetID = rem.entityID;
+            }
         }
+    }
+
+    if (m_nearestInteractNetID < 0 && bestBuildingNetID >= 0) {
+        m_nearestInteractNetID = bestBuildingNetID;
+        m_nearestInteractType = 2;
     }
 }
 
