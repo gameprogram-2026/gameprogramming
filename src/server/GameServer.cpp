@@ -291,7 +291,7 @@ void GameServer::sendSnapshots() {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID < MAX_CLIENTS) { // player-owned entity
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID < MAX_CLIENTS) {
             if (net->isDirty(DIRTY_INVENTORY)) {
                 sendInventorySyncToPeer(net->ownerID);
             }
@@ -515,7 +515,7 @@ void GameServer::onClientDisconnect(uint32_t peerIdx) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == peerIdx) {
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
                 // Drop items on disconnect
@@ -892,7 +892,7 @@ void GameServer::onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == peerIdx) {
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* hp = m_world.tryGet<HealthComponent>(e);
             if (hp) fromTeam = static_cast<uint8_t>(hp->team);
             break;
@@ -1062,7 +1062,7 @@ void GameServer::sendInventorySyncToPeer(uint32_t peerIdx) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == peerIdx) {
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
                 InventorySyncPacket syncPkt{};

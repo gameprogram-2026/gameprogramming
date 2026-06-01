@@ -397,7 +397,7 @@ Entity GameLogic::findOwnedEntity(uint32_t ownerID) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == ownerID) return e;
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == ownerID) return e;
     }
     return Entity{NULL_ENTITY};
 }
