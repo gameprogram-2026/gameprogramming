@@ -911,7 +911,15 @@ void Game::processEvents() {
     for (int i = 0; i < 5; ++i) {
         bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
         if (cur && !m_prevNum[i]) {
-            m_hotbarSelected = i;
+            if (i == 1 && m_inventory.secondaryWeapon.isValid()) {
+                std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
+                m_net.sendStashTransfer(1, 0, 2, 0);
+                m_hotbarSelected = 0;
+            } else if (i == 0) {
+                m_hotbarSelected = 0;
+            } else {
+                m_hotbarSelected = i;
+            }
             if (i >= 2) useConsumable(hotbarConsIdx[i-2]);
         }
         m_prevNum[i] = cur;
