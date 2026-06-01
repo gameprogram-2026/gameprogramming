@@ -183,27 +183,63 @@
   ],
   "crafting_recipes": [
     {
+      "result": "molotov",
+      "description": "소주병 화염병",
+      "result_qty": 1,
+      "ingredients": [
+        {"key": "oil",  "qty": 1},
+        {"key": "wood", "qty": 1}
+      ]
+    },
+    {
+      "result": "bandage",
+      "description": "붕대 제작",
+      "result_qty": 2,
+      "ingredients": [
+        {"key": "food_can", "qty": 1}
+      ]
+    },
+    {
+      "result": "medkit",
+      "description": "구급 상자 제작",
+      "result_qty": 1,
+      "ingredients": [
+        {"key": "bandage", "qty": 3},
+        {"key": "oil",     "qty": 1}
+      ]
+    },
+    {
+      "result": "ammo_9mm",
+      "description": "9mm 탄 제작",
+      "result_qty": 14,
+      "requires_workbench": true,
+      "ingredients": [
+        {"key": "scrap_metal", "qty": 1}
+      ]
+    },
+    {
+      "result": "electronic_part",
+      "description": "전자 부품 조립",
+      "result_qty": 1,
+      "requires_workbench": true,
+      "ingredients": [
+        {"key": "scrap_metal", "qty": 1},
+        {"key": "oil",         "qty": 1}
+      ]
+    }
+  ],
+  "building_recipes": [
+    {
       "result": "barricade",
       "description": "바리케이드 — HP 150, 좀비 3~5회 저지",
-      "build_time": 3.0,
       "ingredients": [
         {"key": "scrap_metal", "qty": 2},
         {"key": "plank",       "qty": 2}
       ]
     },
     {
-      "result": "spike_trap",
-      "description": "가시 트랩 — 밟으면 출혈 부여",
-      "build_time": 2.5,
-      "ingredients": [
-        {"key": "scrap_metal", "qty": 3},
-        {"key": "wood",        "qty": 1}
-      ]
-    },
-    {
       "result": "turret",
       "description": "사제 포탑 — 반경 5m 자동 공격. 화염 접촉 시 폭발",
-      "build_time": 6.0,
       "ingredients": [
         {"key": "electronic_part", "qty": 2},
         {"key": "oil",             "qty": 2},
@@ -211,12 +247,10 @@
       ]
     },
     {
-      "result": "smoke_canister",
-      "description": "연막 캐니스터 — 반경 4m 시야 차단",
-      "build_time": 2.0,
+      "result": "workbench",
+      "description": "제작대",
       "ingredients": [
-        {"key": "oil",        "qty": 1},
-        {"key": "scrap_metal","qty": 1}
+        {"key": "plank", "qty": 2}
       ]
     }
   ],

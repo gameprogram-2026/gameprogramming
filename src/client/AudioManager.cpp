@@ -1,4 +1,5 @@
 #include "AudioManager.h"
+#include "shared/util/Logger.h"
 #include <SDL2/SDL_mixer.h>
 #include <algorithm>
 #include <cstdint>
@@ -18,7 +19,10 @@ void AudioManager::shutdown() {
 
 bool AudioManager::loadSound(const std::string& key, const std::string& path) {
     Mix_Chunk* c = Mix_LoadWAV(path.c_str());
-    if (!c) return false;
+    if (!c) {
+        DZ_LOG_WARN("[Audio] Missing sound '%s' at %s: %s", key.c_str(), path.c_str(), Mix_GetError());
+        return false;
+    }
     m_sounds[key] = c;
     return true;
 }
