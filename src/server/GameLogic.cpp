@@ -11,11 +11,16 @@
 namespace dz {
 
 void GameLogic::processInput(uint32_t ownerID, const InputPacket& pkt) {
-    if (pkt.actions & ACT_SHOOT) {
-        handleRangedFire(ownerID, pkt.aimAngle);
-    }
-    if (pkt.actions & ACT_MELEE) {
-        handleMeleeAttack(ownerID);
+    if (pkt.actions & (ACT_SHOOT | ACT_MELEE)) {
+        Entity e = findOwnedEntity(ownerID);
+        auto* inv = e.isValid() ? m_world.tryGet<InventoryComponent>(e) : nullptr;
+        const Item* weapon = (inv && inv->activeWeapon().isValid()) ? &inv->activeWeapon() : nullptr;
+
+        if (weapon && weapon->key == "pistol_9mm") {
+            handleRangedFire(ownerID, pkt.aimAngle);
+        } else if (weapon && weapon->category == ItemCategory::Weapon) {
+            handleMeleeAttack(ownerID);
+        }
     }
     if (pkt.actions & ACT_RELOAD) {
         handleReload(ownerID);
@@ -174,7 +179,7 @@ void GameLogic::handleReload(uint32_t ownerID) {
     Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
     if (!w.isValid() || w.key != "pistol_9mm") return;
     
-    int magCapacity = 7;
+    int magCapacity = cbt->magCapacity;
     if (w.quantity >= magCapacity) return; // 이미 만탄
     
     // 예비 탄약이 있는지 확인

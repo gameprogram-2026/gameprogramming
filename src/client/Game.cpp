@@ -804,12 +804,23 @@ void Game::processEvents() {
         return;
     }
 
+    const auto& activeWeapon = m_inventory.primaryWeapon;
+    const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
+    const bool isGun = hasWeapon && activeWeapon.name == "pistol_9mm";
+    if (!isGun) {
+        m_curInput.actions &= ~ACT_RELOAD;
+    }
+
     if (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) {
-        const auto& wpn = m_inventory.primaryWeapon;
-        if (!wpn.isValid() || !ClientInventory::isWeaponItem(wpn.name)) {
+        const auto& wpn = activeWeapon;
+        if (!hasWeapon) {
             m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
         } else {
-            bool isGun = (wpn.name == "pistol_9mm"); // 현재 구현된 유일한 총기
+            if (isGun) {
+                m_curInput.actions &= ~ACT_MELEE;
+            } else {
+                m_curInput.actions &= ~ACT_SHOOT;
+            }
             if (isGun && wpn.qty <= 0) {
                 // 잔탄 부족
                 m_curInput.actions &= ~ACT_SHOOT;

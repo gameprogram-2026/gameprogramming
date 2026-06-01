@@ -456,7 +456,7 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
         startWeapon.itemID   = 1;
         startWeapon.key      = "pistol_9mm";
         startWeapon.category = ItemCategory::Weapon;
-        startWeapon.quantity = 1;
+        startWeapon.quantity = 7;
         startWeapon.weight   = 1.5f;
         inv.addItem(startWeapon);
         
