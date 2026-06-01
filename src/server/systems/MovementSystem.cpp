@@ -35,19 +35,6 @@ void MovementSystem::update(World& world, const TileMap& map, float dt) {
         // ── Cooldown ticks ────────────────────────────────────────────────────
         if (cbt.attackCooldown > 0.0f) cbt.attackCooldown -= dt;
         if (cbt.fireCooldown   > 0.0f) cbt.fireCooldown   -= dt;
-        if (cbt.reloadTimer    > 0.0f) {
-            cbt.reloadTimer -= dt;
-            if (cbt.reloadTimer <= 0.0f) {
-                cbt.reloadTimer = 0.0f;
-                cbt.isReloading = false;
-                int need = cbt.magCapacity - cbt.ammoInMag;
-                if (need > 0 && cbt.ammoReserve > 0) {
-                    int fill     = (need < cbt.ammoReserve) ? need : cbt.ammoReserve;
-                    cbt.ammoInMag    += fill;
-                    cbt.ammoReserve  -= fill;
-                }
-            }
-        }
     }
 }
 

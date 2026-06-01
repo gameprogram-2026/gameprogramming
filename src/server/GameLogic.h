@@ -30,6 +30,7 @@ public:
                             int tileX, int tileY, BuildingType type);
     void handleFireThrow(uint32_t ownerID,
                          float originX, float originY);
+    void handleFlamethrowerBurst(uint32_t ownerID, float aimAngle);
     void handleMeleeAttack(uint32_t ownerID);
     void handleRangedFire(uint32_t ownerID, float aimAngle);
     void handleReload(uint32_t ownerID);

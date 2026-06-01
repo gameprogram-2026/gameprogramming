@@ -75,7 +75,7 @@ struct InventoryComponent {
     std::array<Item, EQUIPMENT_SLOT_COUNT> equipped{};
 
     // ── Weight tracking ───────────────────────────────────────────────────────
-    float maxCarryWeight  = 30.0f;  ///< Base + backpack bonus
+    float maxCarryWeight  = 999.0f; ///< Keep looting permissive until backpack limits are finalized
     float currentWeight   = 0.0f;
 
     // ── Active weapon reference ───────────────────────────────────────────────
@@ -92,14 +92,37 @@ struct InventoryComponent {
                currentWeight >= maxCarryWeight;
     }
 
-    /// Adds item to first available grid slot.  Returns false if full.
+    void recalculateGridStats() noexcept {
+        usedSlots = 0;
+        currentWeight = 0.0f;
+        for (const auto& slot : slots) {
+            if (!slot.isValid()) continue;
+            ++usedSlots;
+            currentWeight += slot.weight * slot.quantity;
+        }
+    }
+
+    /// Adds item to grid inventory. Identical keys stack to keep loot pickup usable.
     bool addItem(const Item& item) noexcept {
-        if (isFull()) return false;
+        if (!item.isValid() || item.quantity <= 0) return false;
+
+        recalculateGridStats();
+        float addedWeight = item.weight * item.quantity;
+        if (currentWeight + addedWeight > maxCarryWeight) return false;
+
+        for (auto& slot : slots) {
+            if (slot.isValid() && slot.key == item.key && slot.category == item.category) {
+                slot.quantity += item.quantity;
+                recalculateGridStats();
+                return true;
+            }
+        }
+
+        if (usedSlots >= INVENTORY_GRID_SLOTS) return false;
         for (auto& slot : slots) {
             if (!slot.isValid()) {
                 slot = item;
-                currentWeight += item.weight * item.quantity;
-                ++usedSlots;
+                recalculateGridStats();
                 return true;
             }
         }
@@ -111,9 +134,8 @@ struct InventoryComponent {
         if (index < 0 || index >= INVENTORY_GRID_SLOTS) return {};
         Item removed = slots[index];
         if (removed.isValid()) {
-            currentWeight -= removed.weight * removed.quantity;
-            --usedSlots;
             slots[index] = {};
+            recalculateGridStats();
         }
         return removed;
     }
@@ -122,7 +144,18 @@ struct InventoryComponent {
     bool equip(int gridIndex, EquipSlot slot) noexcept {
         if (gridIndex < 0 || gridIndex >= INVENTORY_GRID_SLOTS) return false;
         int si = static_cast<int>(slot);
+        if (slots[gridIndex].isValid() &&
+            slots[gridIndex].category == ItemCategory::Weapon &&
+            slots[gridIndex].quantity > 1 &&
+            !equipped[si].isValid()) {
+            equipped[si] = slots[gridIndex];
+            equipped[si].quantity = 1;
+            --slots[gridIndex].quantity;
+            recalculateGridStats();
+            return true;
+        }
         std::swap(slots[gridIndex], equipped[si]);
+        recalculateGridStats();
         return true;
     }
 };

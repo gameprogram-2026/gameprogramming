@@ -11,11 +11,18 @@
 namespace dz {
 
 void GameLogic::processInput(uint32_t ownerID, const InputPacket& pkt) {
-    if (pkt.actions & ACT_SHOOT) {
-        handleRangedFire(ownerID, pkt.aimAngle);
-    }
-    if (pkt.actions & ACT_MELEE) {
-        handleMeleeAttack(ownerID);
+    if (pkt.actions & (ACT_SHOOT | ACT_MELEE)) {
+        Entity e = findOwnedEntity(ownerID);
+        auto* inv = e.isValid() ? m_world.tryGet<InventoryComponent>(e) : nullptr;
+        const Item* weapon = (inv && inv->activeWeapon().isValid()) ? &inv->activeWeapon() : nullptr;
+
+        if (weapon && weapon->key == "pistol_9mm") {
+            handleRangedFire(ownerID, pkt.aimAngle);
+        } else if (weapon && weapon->key == "flamethrower") {
+            handleFlamethrowerBurst(ownerID, pkt.aimAngle);
+        } else if (weapon && weapon->category == ItemCategory::Weapon) {
+            handleMeleeAttack(ownerID);
+        }
     }
     if (pkt.actions & ACT_RELOAD) {
         handleReload(ownerID);
@@ -63,6 +70,33 @@ void GameLogic::handleFireThrow(uint32_t ownerID,
     auto* cbt = m_world.tryGet<CombatComponent>(e);
     if (cbt) cbt->emitNoise(NOISE_PISTOL_RADIUS, 3);
     DZ_LOG_INFO("[Logic] Molotov thrown by %u at (%.0f, %.0f)", ownerID, originX, originY);
+}
+
+void GameLogic::handleFlamethrowerBurst(uint32_t ownerID, float aimAngle) {
+    Entity e = findOwnedEntity(ownerID);
+    if (!e.isValid()) return;
+
+    auto* hp  = m_world.tryGet<HealthComponent>(e);
+    auto* xf  = m_world.tryGet<TransformComponent>(e);
+    auto* cbt = m_world.tryGet<CombatComponent>(e);
+    auto* inv = m_world.tryGet<InventoryComponent>(e);
+    if (!hp || !hp->isAlive || !xf || !cbt || !inv) return;
+    if (cbt->fireCooldown > 0.0f || cbt->isReloading) return;
+
+    const Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
+    if (!w.isValid() || w.key != "flamethrower") return;
+
+    constexpr float PI = 3.14159265f;
+    float rad  = aimAngle * (PI / 180.0f);
+    float dirX =  std::sin(rad);
+    float dirY = -std::cos(rad);
+
+    for (float dist : {48.0f, 80.0f, 112.0f, 144.0f}) {
+        m_fire.igniteAtWorld(xf->x + dirX * dist, xf->y + dirY * dist);
+    }
+
+    cbt->fireCooldown = 0.25f;
+    cbt->emitNoise(NOISE_RUN_RADIUS, 3);
 }
 
 void GameLogic::handleMeleeAttack(uint32_t ownerID) {
@@ -174,7 +208,7 @@ void GameLogic::handleReload(uint32_t ownerID) {
     Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
     if (!w.isValid() || w.key != "pistol_9mm") return;
     
-    int magCapacity = 7;
+    int magCapacity = cbt->magCapacity;
     if (w.quantity >= magCapacity) return; // 이미 만탄
     
     // 예비 탄약이 있는지 확인
@@ -232,16 +266,42 @@ void GameLogic::handleLootPickup(uint32_t ownerID, uint32_t lootNetID) {
 
     // Transfer all items from loot entity inventory into player inventory
     auto* linv = m_world.tryGet<InventoryComponent>(loot);
+    bool transferredAny = false;
     if (linv) {
         for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
             if (!linv->slots[i].isValid()) continue;
-            if (inv->addItem(linv->slots[i]))
+            if (inv->addItem(linv->slots[i])) {
                 linv->removeItem(i);
+                transferredAny = true;
+            }
         }
     }
 
-    m_world.destroyEntity(loot);
-    DZ_LOG_INFO("[Logic] Loot %u picked up by owner %u", lootNetID, ownerID);
+    if (transferredAny) {
+        if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
+            net->markDirty(DIRTY_INVENTORY);
+        }
+    }
+
+    bool lootEmpty = true;
+    if (linv) {
+        for (const auto& slot : linv->slots) {
+            if (slot.isValid()) {
+                lootEmpty = false;
+                break;
+            }
+        }
+    }
+
+    if (lootEmpty) {
+        m_world.destroyEntity(loot);
+        DZ_LOG_INFO("[Logic] Loot %u picked up by owner %u", lootNetID, ownerID);
+    } else {
+        inv->recalculateGridStats();
+        DZ_LOG_WARN("[Logic] Loot %u not fully picked up by owner %u; slots=%d/%d weight=%.1f/%.1f",
+                    lootNetID, ownerID, inv->usedSlots, INVENTORY_GRID_SLOTS,
+                    inv->currentWeight, inv->maxCarryWeight);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -371,7 +431,7 @@ Entity GameLogic::findOwnedEntity(uint32_t ownerID) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == ownerID) return e;
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == ownerID) return e;
     }
     return Entity{NULL_ENTITY};
 }

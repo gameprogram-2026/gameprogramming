@@ -291,7 +291,7 @@ void GameServer::sendSnapshots() {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID != 0xFFFF) { // player
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID < MAX_CLIENTS) {
             if (net->isDirty(DIRTY_INVENTORY)) {
                 sendInventorySyncToPeer(net->ownerID);
             }
@@ -400,14 +400,32 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
 }
 
 void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx) {
-    if (m_lobbyPlayers.find(peerIdx) == m_lobbyPlayers.end()) return;
-    auto& inv = m_lobbyPlayers[peerIdx].inv;
+    InventoryComponent* invPtr = nullptr;
+    bool inMatch = false;
+
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
+            invPtr = m_world.tryGet<InventoryComponent>(e);
+            inMatch = invPtr != nullptr;
+            break;
+        }
+    }
+
+    if (!invPtr) {
+        auto it = m_lobbyPlayers.find(peerIdx);
+        if (it == m_lobbyPlayers.end()) return;
+        invPtr = &it->second.inv;
+    }
+
+    auto& inv = *invPtr;
 
     auto getItemPtr = [&](uint8_t type, uint8_t idx) -> Item* {
         if (type == 0 && idx < INVENTORY_GRID_SLOTS) return &inv.slots[idx];
         if (type == 1 && idx == 0) return &inv.equipped[0];
         if (type == 2 && idx == 0) return &inv.equipped[1];
-        if (type == 3 && idx < 40) return &inv.stash[idx];
+        if (!inMatch && type == 3 && idx < 40) return &inv.stash[idx];
         return nullptr;
     };
 
@@ -415,7 +433,30 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
     Item* dst = getItemPtr(dstType, dstIdx);
 
     if (src && dst) {
-        std::swap(*src, *dst);
+        const bool dstIsEquip = (dstType == 1 || dstType == 2);
+        if (dstIsEquip && src->isValid() && src->category != ItemCategory::Weapon) return;
+
+        if (srcType == 0 && dstIsEquip && src->isValid() &&
+            src->category == ItemCategory::Weapon && !dst->isValid()) {
+            inv.equip(srcIdx, dstType == 1 ? EquipSlot::PrimaryWeapon : EquipSlot::SecondaryWeapon);
+        } else {
+            std::swap(*src, *dst);
+            inv.recalculateGridStats();
+        }
+
+        if (inMatch) {
+            sendInventorySyncToPeer(peerIdx);
+            if (auto* net = [&]() -> NetworkComponent* {
+                    for (EntityID id : m_world.alive()) {
+                        Entity e{id};
+                        auto* n = m_world.tryGet<NetworkComponent>(e);
+                        if (n && n->role == NetRole::LocallyOwned && n->ownerID == peerIdx) return n;
+                    }
+                    return nullptr;
+                }()) {
+                net->markDirty(DIRTY_INVENTORY);
+            }
+        }
     }
 }
 
@@ -456,7 +497,7 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
         startWeapon.itemID   = 1;
         startWeapon.key      = "pistol_9mm";
         startWeapon.category = ItemCategory::Weapon;
-        startWeapon.quantity = 1;
+        startWeapon.quantity = 7;
         startWeapon.weight   = 1.5f;
         inv.addItem(startWeapon);
         
@@ -515,7 +556,7 @@ void GameServer::onClientDisconnect(uint32_t peerIdx) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == peerIdx) {
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
                 // Drop items on disconnect
@@ -664,11 +705,11 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
         if (r == 0) {
             item.key = "bandage"; item.category = ItemCategory::Consumable; item.weight = 0.3f;
         } else if (r == 1) {
-            item.key = "9mm_ammo"; item.category = ItemCategory::Ammo; item.weight = 0.05f; item.quantity = 10;
+            item.key = "ammo_9mm"; item.category = ItemCategory::Ammo; item.weight = 0.3f; item.quantity = 30;
         } else if (r == 2) {
             item.key = "medkit"; item.category = ItemCategory::Consumable; item.weight = 0.5f;
         } else {
-            item.key = "scrap"; item.category = ItemCategory::BuildMaterial; item.weight = 0.2f; item.quantity = 3;
+            item.key = "scrap_metal"; item.category = ItemCategory::BuildMaterial; item.weight = 1.0f; item.quantity = 1;
         }
         linv.addItem(item);
         
@@ -715,7 +756,7 @@ void GameServer::onDeathLoot(Entity player) {
     if (!inv || !xf) return;
 
     auto dropItem = [&](const Item& item) {
-        if (!item.isValid()) return;
+        if (!item.isValid() || item.quantity <= 0) return;
         Entity loot = m_world.createEntity();
         float ox = static_cast<float>((std::rand() % 48) - 24);
         float oy = static_cast<float>((std::rand() % 48) - 24);
@@ -892,7 +933,7 @@ void GameServer::onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == peerIdx) {
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* hp = m_world.tryGet<HealthComponent>(e);
             if (hp) fromTeam = static_cast<uint8_t>(hp->team);
             break;
@@ -1062,7 +1103,7 @@ void GameServer::sendInventorySyncToPeer(uint32_t peerIdx) {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID == peerIdx) {
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
                 InventorySyncPacket syncPkt{};
@@ -1112,12 +1153,12 @@ void GameServer::spawnLootBoxes() {
         } else if (theme == 1 || theme == 2) { // Commercial / Industrial
             if (roll < 30) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
             if (roll < 60) return {{"pistol_9mm", ItemCategory::Weapon, 1.5f}, 1};
-            if (roll < 80) return {{"9mm_ammo", ItemCategory::Ammo, 0.05f}, 14};
-            return {{"axe", ItemCategory::Weapon, 3.0f}, 1};
+            if (roll < 80) return {{"ammo_9mm", ItemCategory::Ammo, 0.05f}, 14};
+            return {{"fire_axe", ItemCategory::Weapon, 3.0f}, 1};
         } else { // Military
             if (roll < 40) return {{"medkit", ItemCategory::Consumable, 1.0f}, 2};
-            if (roll < 70) return {{"rifle_556", ItemCategory::Weapon, 3.5f}, 1};
-            if (roll < 90) return {{"556_ammo", ItemCategory::Ammo, 0.05f}, 30};
+            if (roll < 70) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
+            if (roll < 90) return {{"ammo_9mm", ItemCategory::Ammo, 0.05f}, 30};
             return {{"flamethrower", ItemCategory::Weapon, 5.0f}, 1};
         }
     };

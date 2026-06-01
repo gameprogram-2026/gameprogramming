@@ -4,6 +4,7 @@
 #include "shared/ecs/components/NetworkComponent.h"
 #include "shared/ecs/components/CombatComponent.h"
 #include "shared/util/Logger.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -312,6 +313,21 @@ void ZombieAISystem::doAttack(World& world, Entity zombie,
 
         float dx2 = txf->x - xf->x, dy2 = txf->y - xf->y;
         if (dx2*dx2 + dy2*dy2 > atkR * atkR) continue;
+        if (m_map) {
+            float dist = std::sqrt(dx2*dx2 + dy2*dy2);
+            int steps = static_cast<int>(dist / 8.0f);
+            bool blocked = false;
+            for (int i = 1; i <= steps; ++i) {
+                float t = static_cast<float>(i) / std::max(1, steps);
+                float cx = xf->x + dx2 * t;
+                float cy = xf->y + dy2 * t;
+                if (m_map->isSolid(TileMap::worldToTile(cx), TileMap::worldToTile(cy))) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) continue;
+        }
 
         if (ai.state == ZombieState::Frenzy) dmg *= 1.4f;
 
@@ -320,9 +336,9 @@ void ZombieAISystem::doAttack(World& world, Entity zombie,
             auto result = m_combat->applyDamage(world, e, zombie, dmg, DamageType::Zombie);
             // 출혈 적용
             auto* cbt = world.tryGet<CombatComponent>(e);
-            if (cbt && !cbt->isBleeding) {
+            if (cbt && !cbt->isBleeding && ai.type == ZombieType::Brute) {
                 float roll = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
-                float bleedChance = (ai.type == ZombieType::Brute) ? 0.50f : 0.30f;
+                float bleedChance = 0.20f;
                 if (roll < bleedChance) cbt->applyBleed(4.0f, 6.0f);
             }
             (void)result;

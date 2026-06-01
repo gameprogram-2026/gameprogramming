@@ -40,7 +40,6 @@ void Game::tryInteract() {
     if (m_nearestInteractType == 3) { // REC_LOOT equivalent is 3
         m_net.sendLootPickup(static_cast<uint32_t>(m_nearestInteractNetID));
         m_audio.playSound("loot");
-        m_clientHiddenNetIDs.push_back(m_nearestInteractNetID); // 클라이언트 예측으로 즉시 숨김
         m_nearestInteractNetID = -1; 
     } else if (m_nearestInteractType == 2) { // REC_BUILDING equivalent is 2
         m_showCrafting = !m_showCrafting;
@@ -805,13 +804,26 @@ void Game::processEvents() {
         return;
     }
 
+    const auto& activeWeapon = m_inventory.primaryWeapon;
+    const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
+    const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
+    const bool isFlamethrower = hasWeapon && activeWeapon.name == "flamethrower";
+    const bool isRanged = isPistol || isFlamethrower;
+    if (!isPistol) {
+        m_curInput.actions &= ~ACT_RELOAD;
+    }
+
     if (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) {
-        const auto& wpn = m_inventory.primaryWeapon;
-        if (!wpn.isValid() || !ClientInventory::isWeaponItem(wpn.name)) {
+        const auto& wpn = activeWeapon;
+        if (!hasWeapon) {
             m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
         } else {
-            bool isGun = (wpn.name == "pistol_9mm"); // 현재 구현된 유일한 총기
-            if (isGun && wpn.qty <= 0) {
+            if (isRanged) {
+                m_curInput.actions &= ~ACT_MELEE;
+            } else {
+                m_curInput.actions &= ~ACT_SHOOT;
+            }
+            if (isPistol && wpn.qty <= 0) {
                 // 잔탄 부족
                 m_curInput.actions &= ~ACT_SHOOT;
                 if (m_attackTimer <= 0.0f) {
@@ -822,12 +834,15 @@ void Game::processEvents() {
                 m_attackTimer = 0.35f; 
                 m_attackAngle = m_curInput.aimAngle; 
                 
-                if (isGun) {
+                if (isPistol) {
                     m_audio.playSound("shoot", 0.7f);
                     m_cameraShakeTimer = 0.15f;
                     m_cameraShakeIntensity = 6.0f;
                     m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
                     m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
+                } else if (isFlamethrower) {
+                    m_cameraShakeTimer = 0.08f;
+                    m_cameraShakeIntensity = 2.0f;
                 } else {
                     m_audio.playSound("swing", 0.8f);
                     m_cameraShakeTimer = 0.1f;
@@ -843,7 +858,10 @@ void Game::processEvents() {
     m_prevF = curF;
 
     bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
-    if (curQ && !m_prevQ) std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
+    if (curQ && !m_prevQ) {
+        std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
+        m_net.sendStashTransfer(1, 0, 2, 0);
+    }
     m_prevQ = curQ;
 
     static bool prevT = false;
@@ -893,7 +911,15 @@ void Game::processEvents() {
     for (int i = 0; i < 5; ++i) {
         bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
         if (cur && !m_prevNum[i]) {
-            m_hotbarSelected = i;
+            if (i == 1 && m_inventory.secondaryWeapon.isValid()) {
+                std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
+                m_net.sendStashTransfer(1, 0, 2, 0);
+                m_hotbarSelected = 0;
+            } else if (i == 0) {
+                m_hotbarSelected = 0;
+            } else {
+                m_hotbarSelected = i;
+            }
             if (i >= 2) useConsumable(hotbarConsIdx[i-2]);
         }
         m_prevNum[i] = cur;
@@ -1055,25 +1081,37 @@ void Game::update(float dt) {
     }
 
     // 가장 가까운 파밍/상호작용 박스 탐색 (F키 힌트용)
-    const float INTERACT_RANGE = 48.0f;  // 픽셀 단위 (world)
+    const float INTERACT_RANGE = 96.0f;  // 서버 파밍 허용 거리와 동일
     float lx = m_net.localX();
     float ly = m_net.localY();
-    float bestDist = INTERACT_RANGE * INTERACT_RANGE;
+    float bestLootDist = INTERACT_RANGE * INTERACT_RANGE;
+    float bestBuildingDist = INTERACT_RANGE * INTERACT_RANGE;
+    int bestBuildingNetID = -1;
     m_nearestInteractNetID = -1;
     m_nearestInteractType = 0;
 
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
-        if (rem.recType == 3 || rem.recType == 2) { // 3: REC_LOOT, 2: REC_BUILDING
-            float dx = rem.snap[1].x - lx;
-            float dy = rem.snap[1].y - ly;
-            float d2 = dx*dx + dy*dy;
-            if (d2 < bestDist) {
-                bestDist = d2;
+        float dx = rem.snap[1].x - lx;
+        float dy = rem.snap[1].y - ly;
+        float d2 = dx*dx + dy*dy;
+        if (rem.recType == 3) { // REC_LOOT
+            if (d2 < bestLootDist) {
+                bestLootDist = d2;
                 m_nearestInteractNetID = rem.entityID;
                 m_nearestInteractType  = rem.recType;
             }
+        } else if (rem.recType == 2) { // REC_BUILDING
+            if (d2 < bestBuildingDist) {
+                bestBuildingDist = d2;
+                bestBuildingNetID = rem.entityID;
+            }
         }
+    }
+
+    if (m_nearestInteractNetID < 0 && bestBuildingNetID >= 0) {
+        m_nearestInteractNetID = bestBuildingNetID;
+        m_nearestInteractType = 2;
     }
 }
 

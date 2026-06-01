@@ -60,7 +60,7 @@ struct ClientInventory {
     InventoryItem secondaryWeapon;
     int           money        = 0;
     float         totalWeight  = 0.0f;
-    float         maxWeight    = 30.0f;
+    float         maxWeight    = 999.0f;
     int           usedSlots    = 0;
 
     // 이름 기반 무기 판별 (grade 기반 금지 — 구급상자 등 오장착 방지)

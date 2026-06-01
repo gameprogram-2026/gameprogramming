@@ -844,6 +844,13 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
                 SDL_RenderFillRect(m_renderer, &hDiv);
                 SDL_RenderFillRect(m_renderer, &vDiv);
             }
+
+            // 내부 시야: 지붕은 완전히 사라지지 않고 낮은 알파로 남겨 건물 경계를 유지
+            SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 42);
+            SDL_Rect roofTint = {sx1, sy1, pw, ph};
+            SDL_RenderFillRect(m_renderer, &roofTint);
+            SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
         } else {
             // Roof
             SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 255);
@@ -879,7 +886,7 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
             for (int dy = 0; dy < b.h; ++dy) {
                 if (dx == 0 || dx == b.w - 1 || dy == 0 || dy == b.h - 1) {
                     if (map.inBounds(b.x + dx, b.y + dy)) {
-                        if (map.at(b.x + dx, b.y + dy).type != TILE_WALL) {
+                        if (!map.at(b.x + dx, b.y + dy).isSolid()) {
                             int dsx, dsy;
                             cam.worldToScreen((b.x + dx) * TILE_SIZE, (b.y + dy) * TILE_SIZE, dsx, dsy);
                             
@@ -902,18 +909,14 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
                                 }
                                 SDL_RenderFillRect(m_renderer, &doorOpen);
                             } else {
-                                // 외부일 때: 남쪽 문이거나 서/동쪽 문이면 지붕 아래/옆으로 보이게 그림
-                                // 북쪽 문은 지붕에 가려져 안 보임
-                                if (dy == b.h - 1) { // 남쪽 문
-                                    SDL_Rect doorRect = {dsx, dsy, tsz, tsz};
-                                    SDL_SetRenderDrawColor(m_renderer, 100, 70, 40, 255);
-                                    SDL_RenderFillRect(m_renderer, &doorRect);
-                                    SDL_SetRenderDrawColor(m_renderer, 40, 25, 15, 255);
-                                    SDL_RenderDrawRect(m_renderer, &doorRect);
-                                    SDL_Rect knob = {dsx + tsz - 6, dsy + tsz/2 - 2, 4, 4};
-                                    SDL_SetRenderDrawColor(m_renderer, 200, 180, 50, 255);
-                                    SDL_RenderFillRect(m_renderer, &knob);
-                                }
+                                SDL_Rect doorRect = {dsx, dsy, tsz, tsz};
+                                SDL_SetRenderDrawColor(m_renderer, 100, 70, 40, 255);
+                                SDL_RenderFillRect(m_renderer, &doorRect);
+                                SDL_SetRenderDrawColor(m_renderer, 40, 25, 15, 255);
+                                SDL_RenderDrawRect(m_renderer, &doorRect);
+                                SDL_Rect knob = {dsx + tsz - 6, dsy + tsz/2 - 2, 4, 4};
+                                SDL_SetRenderDrawColor(m_renderer, 200, 180, 50, 255);
+                                SDL_RenderFillRect(m_renderer, &knob);
                             }
                         }
                     }
