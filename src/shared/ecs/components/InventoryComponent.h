@@ -102,7 +102,7 @@ struct InventoryComponent {
         }
     }
 
-    /// Adds item to grid inventory. Stackable non-weapons merge by key.
+    /// Adds item to grid inventory. Identical keys stack to keep loot pickup usable.
     bool addItem(const Item& item) noexcept {
         if (!item.isValid() || item.quantity <= 0) return false;
 
@@ -110,13 +110,11 @@ struct InventoryComponent {
         float addedWeight = item.weight * item.quantity;
         if (currentWeight + addedWeight > maxCarryWeight) return false;
 
-        if (item.category != ItemCategory::Weapon) {
-            for (auto& slot : slots) {
-                if (slot.isValid() && slot.key == item.key && slot.category == item.category) {
-                    slot.quantity += item.quantity;
-                    recalculateGridStats();
-                    return true;
-                }
+        for (auto& slot : slots) {
+            if (slot.isValid() && slot.key == item.key && slot.category == item.category) {
+                slot.quantity += item.quantity;
+                recalculateGridStats();
+                return true;
             }
         }
 
@@ -146,6 +144,16 @@ struct InventoryComponent {
     bool equip(int gridIndex, EquipSlot slot) noexcept {
         if (gridIndex < 0 || gridIndex >= INVENTORY_GRID_SLOTS) return false;
         int si = static_cast<int>(slot);
+        if (slots[gridIndex].isValid() &&
+            slots[gridIndex].category == ItemCategory::Weapon &&
+            slots[gridIndex].quantity > 1 &&
+            !equipped[si].isValid()) {
+            equipped[si] = slots[gridIndex];
+            equipped[si].quantity = 1;
+            --slots[gridIndex].quantity;
+            recalculateGridStats();
+            return true;
+        }
         std::swap(slots[gridIndex], equipped[si]);
         recalculateGridStats();
         return true;

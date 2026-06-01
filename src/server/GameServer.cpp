@@ -715,7 +715,7 @@ void GameServer::onDeathLoot(Entity player) {
     if (!inv || !xf) return;
 
     auto dropItem = [&](const Item& item) {
-        if (!item.isValid()) return;
+        if (!item.isValid() || item.quantity <= 0) return;
         Entity loot = m_world.createEntity();
         float ox = static_cast<float>((std::rand() % 48) - 24);
         float oy = static_cast<float>((std::rand() % 48) - 24);

@@ -263,8 +263,10 @@ void GameLogic::handleLootPickup(uint32_t ownerID, uint32_t lootNetID) {
         m_world.destroyEntity(loot);
         DZ_LOG_INFO("[Logic] Loot %u picked up by owner %u", lootNetID, ownerID);
     } else {
-        DZ_LOG_DEBUG("[Logic] Loot %u partially picked up by owner %u; inventory full or overweight",
-                     lootNetID, ownerID);
+        inv->recalculateGridStats();
+        DZ_LOG_WARN("[Logic] Loot %u not fully picked up by owner %u; slots=%d/%d weight=%.1f/%.1f",
+                    lootNetID, ownerID, inv->usedSlots, INVENTORY_GRID_SLOTS,
+                    inv->currentWeight, inv->maxCarryWeight);
     }
 }
 
