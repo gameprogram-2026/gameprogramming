@@ -664,11 +664,11 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
         if (r == 0) {
             item.key = "bandage"; item.category = ItemCategory::Consumable; item.weight = 0.3f;
         } else if (r == 1) {
-            item.key = "9mm_ammo"; item.category = ItemCategory::Ammo; item.weight = 0.05f; item.quantity = 10;
+            item.key = "ammo_9mm"; item.category = ItemCategory::Ammo; item.weight = 0.3f; item.quantity = 30;
         } else if (r == 2) {
             item.key = "medkit"; item.category = ItemCategory::Consumable; item.weight = 0.5f;
         } else {
-            item.key = "scrap"; item.category = ItemCategory::BuildMaterial; item.weight = 0.2f; item.quantity = 3;
+            item.key = "scrap_metal"; item.category = ItemCategory::BuildMaterial; item.weight = 1.0f; item.quantity = 1;
         }
         linv.addItem(item);
         
@@ -1112,12 +1112,12 @@ void GameServer::spawnLootBoxes() {
         } else if (theme == 1 || theme == 2) { // Commercial / Industrial
             if (roll < 30) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
             if (roll < 60) return {{"pistol_9mm", ItemCategory::Weapon, 1.5f}, 1};
-            if (roll < 80) return {{"9mm_ammo", ItemCategory::Ammo, 0.05f}, 14};
-            return {{"axe", ItemCategory::Weapon, 3.0f}, 1};
+            if (roll < 80) return {{"ammo_9mm", ItemCategory::Ammo, 0.05f}, 14};
+            return {{"fire_axe", ItemCategory::Weapon, 3.0f}, 1};
         } else { // Military
             if (roll < 40) return {{"medkit", ItemCategory::Consumable, 1.0f}, 2};
-            if (roll < 70) return {{"rifle_556", ItemCategory::Weapon, 3.5f}, 1};
-            if (roll < 90) return {{"556_ammo", ItemCategory::Ammo, 0.05f}, 30};
+            if (roll < 70) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
+            if (roll < 90) return {{"ammo_9mm", ItemCategory::Ammo, 0.05f}, 30};
             return {{"flamethrower", ItemCategory::Weapon, 5.0f}, 1};
         }
     };

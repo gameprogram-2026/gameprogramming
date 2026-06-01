@@ -232,16 +232,40 @@ void GameLogic::handleLootPickup(uint32_t ownerID, uint32_t lootNetID) {
 
     // Transfer all items from loot entity inventory into player inventory
     auto* linv = m_world.tryGet<InventoryComponent>(loot);
+    bool transferredAny = false;
     if (linv) {
         for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
             if (!linv->slots[i].isValid()) continue;
-            if (inv->addItem(linv->slots[i]))
+            if (inv->addItem(linv->slots[i])) {
                 linv->removeItem(i);
+                transferredAny = true;
+            }
         }
     }
 
-    m_world.destroyEntity(loot);
-    DZ_LOG_INFO("[Logic] Loot %u picked up by owner %u", lootNetID, ownerID);
+    if (transferredAny) {
+        if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
+            net->markDirty(DIRTY_INVENTORY);
+        }
+    }
+
+    bool lootEmpty = true;
+    if (linv) {
+        for (const auto& slot : linv->slots) {
+            if (slot.isValid()) {
+                lootEmpty = false;
+                break;
+            }
+        }
+    }
+
+    if (lootEmpty) {
+        m_world.destroyEntity(loot);
+        DZ_LOG_INFO("[Logic] Loot %u picked up by owner %u", lootNetID, ownerID);
+    } else {
+        DZ_LOG_DEBUG("[Logic] Loot %u partially picked up by owner %u; inventory full or overweight",
+                     lootNetID, ownerID);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
