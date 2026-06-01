@@ -166,12 +166,14 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
 
 
 void NetworkSystem::sendReliable(uint32_t idx, const void* data, size_t len) {
+    if (idx >= MAX_CLIENTS) return;
     if (!m_peers[idx].connected) return;
     ENetPacket* pkt = enet_packet_create(data, len, ENET_PACKET_FLAG_RELIABLE);
     enet_peer_send(m_peers[idx].peer, CHAN_RELIABLE, pkt);
 }
 
 void NetworkSystem::sendUnreliable(uint32_t idx, const void* data, size_t len) {
+    if (idx >= MAX_CLIENTS) return;
     if (!m_peers[idx].connected) return;
     ENetPacket* pkt = enet_packet_create(data, len, 0); // Unreliable
     enet_peer_send(m_peers[idx].peer, CHAN_UNRELIABLE, pkt);

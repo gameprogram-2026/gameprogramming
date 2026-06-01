@@ -291,7 +291,7 @@ void GameServer::sendSnapshots() {
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->ownerID != 0xFFFF) { // player
+        if (net && net->ownerID < MAX_CLIENTS) { // player-owned entity
             if (net->isDirty(DIRTY_INVENTORY)) {
                 sendInventorySyncToPeer(net->ownerID);
             }
