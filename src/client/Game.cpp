@@ -943,6 +943,14 @@ void Game::processInventorySync() {
             sameItem(prevSecondary, newInv.primaryWeapon)) {
             std::swap(newInv.primaryWeapon, newInv.secondaryWeapon);
         }
+        if (!newInv.primaryWeapon.isValid() && prevPrimary.isValid()) {
+            newInv.primaryWeapon = prevPrimary;
+            totalW += prevPrimary.weight * prevPrimary.qty;
+        }
+        if (!newInv.secondaryWeapon.isValid() && prevSecondary.isValid()) {
+            newInv.secondaryWeapon = prevSecondary;
+            totalW += prevSecondary.weight * prevSecondary.qty;
+        }
         newInv.totalWeight = totalW;
         m_inventory = newInv;
         m_net.clearInventorySync();
