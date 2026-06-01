@@ -50,7 +50,7 @@ struct InventoryItem {
     std::string grade;   // "normal", "enhanced", "rare", "unique"
     int         qty    = 0;
     float       weight = 0.0f;
-    bool        isValid() const { return qty > 0; }
+    bool        isValid() const { return !name.empty(); }
 };
 
 struct ClientInventory {
@@ -185,6 +185,7 @@ public:
 
     void drawBuildModeOverlay(bool active, int buildType, int mouseX, int mouseY,
                               const Camera& cam);
+    void drawBuildRecipePanel(const ClientInventory& inv, int buildType);
     void drawExtractionZones(const Camera& cam,
                              const std::vector<std::pair<float,float>>& zones,
                              bool open);

@@ -50,7 +50,13 @@ private:
     void onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType);
     void onCraftRequest(uint32_t peerIdx, uint8_t recipeID);
     void onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID);
+    void onSelectWeaponReq(uint32_t peerIdx, uint8_t slot);
+    void onDoorToggleReq(uint32_t peerIdx, uint16_t doorID);
+    void sendDoorState(uint32_t peerIdx, uint16_t doorID, bool open);
+    void broadcastDoorState(uint16_t doorID, bool open);
+    void syncDoorStatesToPeer(uint32_t peerIdx);
     void sendInventorySyncToPeer(uint32_t peerIdx);
+    void sendStashSyncToPeer(uint32_t peerIdx);
 
     void sendHpSyncToPeer(uint32_t peerIdx);   ///< HP + 상태 플래그를 해당 피어에 전송
     void broadcastTeamStatus();                 ///< 매초 팀 상태 브로드캐스트
@@ -71,6 +77,7 @@ private:
     // 라운드 및 세션 관리
     bool     m_gameStarted = false;
     float    m_gameTimer = 0.0f;
+    float    m_zombieSpawnTimer = 0.0f;
     int      m_activePlayers = 0; // 생존(현재 접속 중) 플레이어 수
     uint16_t m_port = 0;
     bool     m_childServerLaunched = false;

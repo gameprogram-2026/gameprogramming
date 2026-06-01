@@ -3,6 +3,7 @@
 #include "shared/ecs/components/HealthComponent.h"
 #include "shared/ecs/components/NetworkComponent.h"
 #include "shared/ecs/components/CombatComponent.h"
+#include "shared/TileMap.h"
 #include "shared/util/Logger.h"
 #include <algorithm>
 #include <cmath>
@@ -76,8 +77,8 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
                             float t = static_cast<float>(i) / steps;
                             float cx = xf->x + dx * t;
                             float cy = xf->y + dy * t;
-                            int tx = static_cast<int>(cx) / 32; // TILE_SIZE=32 가정
-                            int ty = static_cast<int>(cy) / 32;
+                            int tx = TileMap::worldToTile(cx);
+                            int ty = TileMap::worldToTile(cy);
                             if (m_map->isSolid(tx, ty)) {
                                 hasLOS = false;
                                 break;

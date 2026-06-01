@@ -47,6 +47,10 @@ bool TileMap::loadFromJSON(const std::string& path) {
     m_w = cJSON_GetObjectItem(map, "width")  ? cJSON_GetObjectItem(map, "width")->valueint  : 80;
     m_h = cJSON_GetObjectItem(map, "height") ? cJSON_GetObjectItem(map, "height")->valueint : 80;
     m_tiles.assign(static_cast<size_t>(m_w * m_h), Tile{});
+    m_extractionZones.clear();
+    m_buildings.clear();
+    m_doors.clear();
+    m_playerSpawns.clear();
 
     // Parse layer data if present
     cJSON* layers = cJSON_GetObjectItem(map, "layers");
@@ -93,6 +97,19 @@ bool TileMap::loadFromJSON(const std::string& path) {
             bd.h = cJSON_GetObjectItem(item, "h") ? cJSON_GetObjectItem(item, "h")->valueint : 1;
             bd.theme = cJSON_GetObjectItem(item, "theme") ? cJSON_GetObjectItem(item, "theme")->valueint : 0;
             m_buildings.push_back(bd);
+        }
+    }
+
+    cJSON* spawns = cJSON_GetObjectItem(map, "playerSpawns");
+    if (spawns && cJSON_IsArray(spawns)) {
+        int count = cJSON_GetArraySize(spawns);
+        for (int i = 0; i < count; ++i) {
+            cJSON* item = cJSON_GetArrayItem(spawns, i);
+            PlayerSpawn sp;
+            sp.team = cJSON_GetObjectItem(item, "team") ? cJSON_GetObjectItem(item, "team")->valueint : i + 1;
+            sp.x = cJSON_GetObjectItem(item, "x") ? cJSON_GetObjectItem(item, "x")->valueint : 0;
+            sp.y = cJSON_GetObjectItem(item, "y") ? cJSON_GetObjectItem(item, "y")->valueint : 0;
+            m_playerSpawns.push_back(sp);
         }
     }
 
@@ -223,6 +240,80 @@ void TileMap::clearOccupied(int tx, int ty) {
     Tile& t = at(tx, ty);
     t.flags   &= ~(TILE_OCCUPIED | TILE_SOLID);
     t.entityID = 0;
+}
+
+void TileMap::initializeBuildingDoors(bool openByDefault) {
+    m_doors.clear();
+    uint16_t nextID = 0;
+
+    auto addDoor = [&](uint16_t buildingIdx, int tx, int ty) {
+        if (!inBounds(tx, ty)) return;
+        for (const auto& door : m_doors) {
+            if (door.tx == tx && door.ty == ty) return;
+        }
+
+        DoorDef door{};
+        door.id = nextID++;
+        door.building = buildingIdx;
+        door.tx = tx;
+        door.ty = ty;
+        door.open = false;
+        m_doors.push_back(door);
+        setDoorOpen(door.id, openByDefault);
+    };
+
+    for (uint16_t i = 0; i < m_buildings.size(); ++i) {
+        const auto& b = m_buildings[i];
+        if (b.w < 3 || b.h < 3) continue;
+        const int midX = b.x + b.w / 2;
+        const int midY = b.y + b.h / 2;
+        addDoor(i, midX, b.y);
+        addDoor(i, midX, b.y + b.h - 1);
+        addDoor(i, b.x, midY);
+        addDoor(i, b.x + b.w - 1, midY);
+    }
+}
+
+bool TileMap::setDoorOpen(uint16_t doorID, bool open) {
+    for (auto& door : m_doors) {
+        if (door.id != doorID) continue;
+        if (!inBounds(door.tx, door.ty)) return false;
+
+        door.open = open;
+        Tile& tile = at(door.tx, door.ty);
+        if (open) {
+            tile.type = TILE_WOOD_FLOOR;
+            tile.flags &= ~TILE_SOLID;
+        } else {
+            tile.type = TILE_WALL;
+            tile.flags |= TILE_SOLID;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool TileMap::toggleDoor(uint16_t doorID) {
+    for (const auto& door : m_doors) {
+        if (door.id == doorID) return setDoorOpen(doorID, !door.open);
+    }
+    return false;
+}
+
+int TileMap::findNearestDoor(float wx, float wy, float maxDist) const {
+    const float maxD2 = maxDist * maxDist;
+    float bestD2 = maxD2;
+    int best = -1;
+    for (const auto& door : m_doors) {
+        float dx = tileCentre(door.tx) - wx;
+        float dy = tileCentre(door.ty) - wy;
+        float d2 = dx * dx + dy * dy;
+        if (d2 <= bestD2) {
+            bestD2 = d2;
+            best = static_cast<int>(door.id);
+        }
+    }
+    return best;
 }
 
 } // namespace dz

@@ -69,6 +69,21 @@ public:
     };
     const std::vector<BuildingDef>& getBuildings() const { return m_buildings; }
 
+    struct DoorDef {
+        uint16_t id = 0;
+        uint16_t building = 0;
+        int tx = 0;
+        int ty = 0;
+        bool open = false;
+    };
+    const std::vector<DoorDef>& getDoors() const { return m_doors; }
+
+    struct PlayerSpawn {
+        uint8_t team;
+        int x, y;
+    };
+    const std::vector<PlayerSpawn>& getPlayerSpawns() const { return m_playerSpawns; }
+
     bool inBounds(int tx, int ty) const noexcept {
         return tx >= 0 && ty >= 0 && tx < m_w && ty < m_h;
     }
@@ -104,12 +119,18 @@ public:
     void burnTile(int tx, int ty);          ///< Converts flammable tile to ash
     void setOccupied(int tx, int ty, uint32_t entityID, bool solid);
     void clearOccupied(int tx, int ty);
+    void initializeBuildingDoors(bool openByDefault = false);
+    bool setDoorOpen(uint16_t doorID, bool open);
+    bool toggleDoor(uint16_t doorID);
+    int findNearestDoor(float wx, float wy, float maxDist) const;
 
 private:
     int              m_w = 0, m_h = 0;
     std::vector<Tile> m_tiles;
     std::vector<ExtZone> m_extractionZones;
     std::vector<BuildingDef> m_buildings;
+    std::vector<DoorDef> m_doors;
+    std::vector<PlayerSpawn> m_playerSpawns;
 
     static uint8_t defaultFlags(TileType t) noexcept;
 };

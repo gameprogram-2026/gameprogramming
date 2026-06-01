@@ -250,6 +250,20 @@ void NetworkSystem::handlePacket(uint32_t peerIdx,
         if (m_onStashTransfer) m_onStashTransfer(peerIdx, pkt.srcType, pkt.srcIdx, pkt.dstType, pkt.dstIdx);
         break;
     }
+    case PacketType::C2S_SelectWeapon: {
+        if (len < sizeof(SelectWeaponPacket)) return;
+        SelectWeaponPacket pkt{};
+        std::memcpy(&pkt, data, sizeof(pkt));
+        if (m_onSelectWeapon) m_onSelectWeapon(peerIdx, pkt.slot);
+        break;
+    }
+    case PacketType::C2S_DoorToggle: {
+        if (len < sizeof(DoorTogglePacket)) return;
+        DoorTogglePacket pkt{};
+        std::memcpy(&pkt, data, sizeof(pkt));
+        if (m_onDoorToggle) m_onDoorToggle(peerIdx, pkt.doorID);
+        break;
+    }
     case PacketType::C2S_UseItem: {
         if (len < sizeof(UseItemPacket)) return;
         UseItemPacket pkt{};

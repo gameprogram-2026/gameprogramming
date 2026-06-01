@@ -6,9 +6,40 @@
 #include "shared/ecs/components/InventoryComponent.h"
 #include "shared/ItemData.h"
 #include "shared/util/Logger.h"
+#include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace dz {
+
+namespace {
+
+struct ItemDef {
+    uint32_t id;
+    ItemCategory category;
+    float weight;
+};
+
+ItemDef itemDefForKey(const std::string& key) {
+    if (key == "scrap_pipe")      return {1,  ItemCategory::Weapon,        1.5f};
+    if (key == "nail_bat")        return {2,  ItemCategory::Weapon,        2.0f};
+    if (key == "fire_axe")        return {3,  ItemCategory::Weapon,        3.0f};
+    if (key == "pistol_9mm")      return {4,  ItemCategory::Weapon,        1.0f};
+    if (key == "molotov")         return {5,  ItemCategory::Throwable,     0.5f};
+    if (key == "flamethrower")    return {6,  ItemCategory::Weapon,        5.0f};
+    if (key == "ammo_9mm")        return {10, ItemCategory::Ammo,          0.3f};
+    if (key == "scrap_metal")     return {20, ItemCategory::BuildMaterial, 1.0f};
+    if (key == "plank")           return {21, ItemCategory::BuildMaterial, 0.8f};
+    if (key == "electronic_part") return {22, ItemCategory::BuildMaterial, 0.5f};
+    if (key == "oil")             return {23, ItemCategory::BuildMaterial, 1.2f};
+    if (key == "wood")            return {24, ItemCategory::BuildMaterial, 0.7f};
+    if (key == "medkit")          return {30, ItemCategory::Consumable,    1.0f};
+    if (key == "bandage")         return {31, ItemCategory::Consumable,    0.3f};
+    if (key == "food_can")        return {32, ItemCategory::Consumable,    0.4f};
+    return {0, ItemCategory::Misc, 1.0f};
+}
+
+} // namespace
 
 void GameLogic::processInput(uint32_t ownerID, const InputPacket& pkt) {
     if (pkt.actions & (ACT_SHOOT | ACT_MELEE)) {
@@ -44,6 +75,8 @@ void GameLogic::handleBuildRequest(uint32_t ownerID,
     if (!building.isValid()) {
         DZ_LOG_DEBUG("[Logic] Build failed for owner %u at tile (%d,%d)",
                      ownerID, tileX, tileY);
+    } else if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
+        net->markDirty(DIRTY_INVENTORY);
     }
 }
 
@@ -129,7 +162,10 @@ void GameLogic::handleRangedFire(uint32_t ownerID, float aimAngle) {
     Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
     if (!w.isValid() || w.category != ItemCategory::Weapon) return;
     if (w.key != "pistol_9mm") return; // 현재는 권총만 사격 지원
-    if (w.quantity <= 0) return; // 잔탄 없음
+    if (w.quantity <= 0) {
+        handleReload(ownerID);
+        return;
+    }
 
     damage = 60.0f; noiseR = NOISE_PISTOL_RADIUS;
 
@@ -140,6 +176,10 @@ void GameLogic::handleRangedFire(uint32_t ownerID, float aimAngle) {
     // 탄약 변경 사항을 클라이언트에 동기화
     auto* net = m_world.tryGet<NetworkComponent>(e);
     if (net) net->markDirty(DIRTY_INVENTORY);
+
+    if (w.quantity <= 0) {
+        handleReload(ownerID);
+    }
 
     // 15% chance to trigger massive zombie wave penalty removed for better gameplay
 
@@ -374,14 +414,17 @@ void GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
     }
 
     // 결과물 생성
-    const ItemMeta* meta = findItemMeta(rec.resultKey);
+    const ItemDef def = itemDefForKey(rec.resultKey);
     Item result;
-    result.itemID   = 90 + recipeID; // 가상 ID (90번대)
+    result.itemID   = def.id;
     result.key      = rec.resultKey;
-    result.category = ItemCategory::BuildMaterial;
+    result.category = def.category;
     result.quantity = rec.resultQty;
-    result.weight   = 5.0f; // 기본 무게 — 향후 ItemMeta에 추가 가능
+    result.weight   = def.weight;
     inv->addItem(result);
+    if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
+        net->markDirty(DIRTY_INVENTORY);
+    }
 
     DZ_LOG_INFO("[Craft] owner=%u recipe=%u → %s x%d",
                 ownerID, recipeID, rec.resultKey, rec.resultQty);
@@ -404,7 +447,11 @@ void GameLogic::handleUseItem(uint32_t ownerID, const char* key) {
     for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
         if (!inv->slots[i].isValid()) continue;
         if (inv->slots[i].key != key) continue;
-        inv->removeItem(i);
+        --inv->slots[i].quantity;
+        if (inv->slots[i].quantity <= 0) {
+            inv->slots[i] = {};
+        }
+        inv->recalculateGridStats();
         found = true;
         break;
     }
@@ -424,7 +471,12 @@ void GameLogic::handleUseItem(uint32_t ownerID, const char* key) {
         hp->heal(10.0f);
         DZ_LOG_INFO("[Item] Player %u used food_can → HP %.0f", ownerID, hp->currentHp);
     }
-    // 필요시 더 추가 (예: rare_meds → heal 80)
+
+    auto* net = m_world.tryGet<NetworkComponent>(e);
+    if (net) {
+        net->markDirty(DIRTY_INVENTORY);
+        net->markDirty(DIRTY_HEALTH);
+    }
 }
 
 Entity GameLogic::findOwnedEntity(uint32_t ownerID) {

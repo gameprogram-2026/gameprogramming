@@ -132,6 +132,7 @@ private:
     // 인게임 알림 메시지 (무게 초과 등 단기 표시)
     std::string     m_notifyMsg;
     float           m_notifyTimer = 0.0f;
+    std::string     m_interactPrompt;
 
     // Login State
     std::string     m_username;

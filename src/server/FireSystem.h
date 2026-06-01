@@ -45,6 +45,7 @@ public:
     void igniteAtWorld(float wx, float wy);   ///< Convenience: converts to tile
 
     void update(World& world, TileMap& map, float dt);
+    void reset();
 
     bool isBurning(int16_t tx, int16_t ty) const noexcept {
         return m_tileSet.count(fireTileKey(tx, ty)) != 0;

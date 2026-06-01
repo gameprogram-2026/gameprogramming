@@ -56,6 +56,12 @@ public:
     void addZone(const ExtractionZone& zone);
     void update(World& world, float dt, float gameTime);
 
+    void clearZones() {
+        m_zones = {};
+        m_zoneCount = 0;
+        m_zonesOpen = false;
+    }
+
     void reset() {
         m_zonesOpen = false;
         for (int i = 0; i < m_zoneCount; ++i) {

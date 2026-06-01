@@ -101,7 +101,7 @@ public:
 
     // ── State ─────────────────────────────────────────────────────────────────
     /// 충돌용 TileMap 연결 (Game::run() 초기화 후 호출)
-    void setMap(const TileMap* map) noexcept { m_map = map; }
+    void setMap(TileMap* map) noexcept { m_map = map; }
 
     // ── 새 send 메서드 ──────────────────────────────────────────────────────────
     void sendUseItem(const char* key);
@@ -112,6 +112,8 @@ public:
 
     void sendJoinMatch();
     void sendStashTransfer(uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx);
+    void sendSelectWeapon(uint8_t slot);
+    void sendDoorToggle(uint16_t doorID);
 
     bool     isConnected()   const noexcept { return m_peer != nullptr; }
     bool     isAuthenticated() const noexcept { return m_isAuthenticated; }
@@ -122,6 +124,7 @@ public:
         m_localMaxHp = 100.0f; 
         m_localFlags = 0; 
         m_localDead = false;
+        m_hasExtractionEvent = false;
         m_predCount = 0;
         m_predHead = 0;
     }
@@ -149,6 +152,11 @@ public:
         return res;
     }
     float    extractionProgress() const noexcept { return m_extractProg; }
+    bool     consumeExtractionEvent() noexcept {
+        bool res = m_hasExtractionEvent;
+        m_hasExtractionEvent = false;
+        return res;
+    }
 
     int      teamAlive(int team) const noexcept {
         return (team >= 1 && team <= 4) ? m_teamAlive[team-1] : 0;
@@ -211,6 +219,7 @@ private:
     int         m_teamAlive[4] = {0, 0, 0, 0};
     uint8_t     m_allianceBits = 0;
     bool        m_hasSirenEvent = false;
+    bool        m_hasExtractionEvent = false;
     uint16_t    m_gameTimeSec  = 0;
 
     int      m_tickCount    = 0;
@@ -245,7 +254,7 @@ private:
     std::vector<ZombieDeathInfo> m_zombieDeaths;
 
     // ── TileMap (충돌용) ──────────────────────────────────────────────────────
-    const TileMap* m_map = nullptr;
+    TileMap* m_map = nullptr;
 
     // ── 포탑 레이저 빔 이펙트 ──────────────────────────────────────────────────
     std::vector<TurretBeam> m_turretBeams;

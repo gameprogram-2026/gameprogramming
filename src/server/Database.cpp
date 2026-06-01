@@ -2,6 +2,7 @@
 // Database.cpp — MySQL-backed persistent store for DeadZone
 // ──────────────────────────────────────────────────────────────────────────────
 #include "Database.h"
+#include "shared/ecs/components/CombatComponent.h"
 #include "shared/util/Logger.h"
 
 #include <mysql.h>
@@ -210,7 +211,7 @@ bool Database::registerAccount(const std::string& username,
     // food_can: id=32, cat=5
     std::string sqlStarterItems =
         std::string("INSERT IGNORE INTO inventory (username, slot_index, is_equipped, item_id, item_key, category, quantity, weight) VALUES ") +
-        "('" + escUser.data() + "', 0, 2, 4, 'pistol_9mm', 1, 1, 1.0), " +
+        "('" + escUser.data() + "', 0, 2, 4, 'pistol_9mm', 1, " + std::to_string(PISTOL_MAG_CAPACITY) + ", 1.0), " +
         "('" + escUser.data() + "', 1, 2, 10, 'ammo_9mm', 4, 30, 0.3), " +
         "('" + escUser.data() + "', 2, 2, 30, 'medkit', 5, 1, 1.0), " +
         "('" + escUser.data() + "', 3, 2, 32, 'food_can', 5, 2, 0.4)";

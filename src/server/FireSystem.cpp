@@ -27,6 +27,13 @@ void FireSystem::igniteAtWorld(float wx, float wy) {
                static_cast<int16_t>(TileMap::worldToTile(wy)));
 }
 
+void FireSystem::reset() {
+    m_tiles.clear();
+    m_tileSet.clear();
+    m_frontier.clear();
+    m_spreadTimer = 0.0f;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 void FireSystem::update(World& world, TileMap& map, float dt) {
     // ── Decay tile TTL ────────────────────────────────────────────────────────

@@ -745,7 +745,9 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
 void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX, float localY) {
     const int WALL_T = static_cast<int>(TILE_SIZE * cam.zoom);
 
-    for (const auto& b : map.getBuildings()) {
+    const auto& buildings = map.getBuildings();
+    for (size_t buildingIdx = 0; buildingIdx < buildings.size(); ++buildingIdx) {
+        const auto& b = buildings[buildingIdx];
         int sx1, sy1, sx2, sy2;
         cam.worldToScreen(b.x*TILE_SIZE,          b.y*TILE_SIZE,          sx1, sy1);
         cam.worldToScreen((b.x+b.w)*TILE_SIZE,   (b.y+b.h)*TILE_SIZE,   sx2, sy2);
@@ -783,15 +785,19 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
         float bwWorld = b.w * TILE_SIZE;
         float bhWorld = b.h * TILE_SIZE;
         
+        const float revealMargin = TILE_SIZE * 2.0f;
         bool isInside = (localX >= bxWorld && localX <= bxWorld + bwWorld &&
                          localY >= byWorld && localY <= byWorld + bhWorld);
+        bool isNear = (localX >= bxWorld - revealMargin && localX <= bxWorld + bwWorld + revealMargin &&
+                       localY >= byWorld - revealMargin && localY <= byWorld + bhWorld + revealMargin);
+        bool revealInterior = isInside || isNear;
 
         // 1. 그림자
         SDL_SetRenderDrawColor(m_renderer, 0,0,0, 60);
         SDL_Rect shadow = {sx1+6, sy1+6, pw, ph};
         SDL_RenderFillRect(m_renderer, &shadow);
 
-        if (isInside) {
+        if (revealInterior) {
             // 내부 바닥
             SDL_SetRenderDrawColor(m_renderer, floorCol.r, floorCol.g, floorCol.b, 255);
             SDL_Rect interiorFloor = {sx1+WALL_T, sy1+WALL_T, pw-2*WALL_T, ph-2*WALL_T};
@@ -847,7 +853,7 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
 
             // 내부 시야: 지붕은 완전히 사라지지 않고 낮은 알파로 남겨 건물 경계를 유지
             SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 42);
+            SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, isInside ? 42 : 72);
             SDL_Rect roofTint = {sx1, sy1, pw, ph};
             SDL_RenderFillRect(m_renderer, &roofTint);
             SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
@@ -881,45 +887,37 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
             }
         }
         
-        // 문(입구) 렌더링
-        for (int dx = 0; dx < b.w; ++dx) {
-            for (int dy = 0; dy < b.h; ++dy) {
-                if (dx == 0 || dx == b.w - 1 || dy == 0 || dy == b.h - 1) {
-                    if (map.inBounds(b.x + dx, b.y + dy)) {
-                        if (!map.at(b.x + dx, b.y + dy).isSolid()) {
-                            int dsx, dsy;
-                            cam.worldToScreen((b.x + dx) * TILE_SIZE, (b.y + dy) * TILE_SIZE, dsx, dsy);
-                            
-                            // 내부일 때는 문구멍(바닥색)을 내고, 열린 문을 그림
-                            if (isInside) {
-                                // 벽을 덮어쓰는 바닥 타일
-                                SDL_Rect gapRect = {dsx, dsy, tsz, tsz};
-                                SDL_SetRenderDrawColor(m_renderer, floorCol.r, floorCol.g, floorCol.b, 255);
-                                SDL_RenderFillRect(m_renderer, &gapRect);
-                                
-                                // 열린 문 (벽 옆에 붙어있는 형태)
-                                SDL_SetRenderDrawColor(m_renderer, 130, 90, 50, 255);
-                                SDL_Rect doorOpen;
-                                if (dy == 0 || dy == b.h - 1) {
-                                    // 북/남쪽 문 -> 열리면 세로로
-                                    doorOpen = {dsx, dsy, 4, tsz};
-                                } else {
-                                    // 동/서쪽 문 -> 열리면 가로로
-                                    doorOpen = {dsx, dsy, tsz, 4};
-                                }
-                                SDL_RenderFillRect(m_renderer, &doorOpen);
-                            } else {
-                                SDL_Rect doorRect = {dsx, dsy, tsz, tsz};
-                                SDL_SetRenderDrawColor(m_renderer, 100, 70, 40, 255);
-                                SDL_RenderFillRect(m_renderer, &doorRect);
-                                SDL_SetRenderDrawColor(m_renderer, 40, 25, 15, 255);
-                                SDL_RenderDrawRect(m_renderer, &doorRect);
-                                SDL_Rect knob = {dsx + tsz - 6, dsy + tsz/2 - 2, 4, 4};
-                                SDL_SetRenderDrawColor(m_renderer, 200, 180, 50, 255);
-                                SDL_RenderFillRect(m_renderer, &knob);
-                            }
-                        }
+        if (revealInterior) {
+            // 문(입구)은 지붕이 투명해졌을 때만 내부 벽의 구멍으로 렌더링한다.
+            // 밖에서는 지붕 위에 문 스프라이트가 떠 보이지 않게 숨긴다.
+            for (const auto& door : map.getDoors()) {
+                if (door.building != buildingIdx) continue;
+
+                int dsx, dsy;
+                cam.worldToScreen(door.tx * TILE_SIZE, door.ty * TILE_SIZE, dsx, dsy);
+
+                if (door.open) {
+                    SDL_Rect gapRect = {dsx, dsy, tsz, tsz};
+                    SDL_SetRenderDrawColor(m_renderer, floorCol.r, floorCol.g, floorCol.b, 255);
+                    SDL_RenderFillRect(m_renderer, &gapRect);
+
+                    SDL_SetRenderDrawColor(m_renderer, 130, 90, 50, 255);
+                    SDL_Rect doorOpen;
+                    if (door.ty == b.y || door.ty == b.y + b.h - 1) {
+                        doorOpen = {dsx, dsy, std::max(3, tsz / 6), tsz};
+                    } else {
+                        doorOpen = {dsx, dsy, tsz, std::max(3, tsz / 6)};
                     }
+                    SDL_RenderFillRect(m_renderer, &doorOpen);
+                } else {
+                    SDL_Rect doorRect = {dsx, dsy, tsz, tsz};
+                    SDL_SetRenderDrawColor(m_renderer, 105, 70, 38, 255);
+                    SDL_RenderFillRect(m_renderer, &doorRect);
+                    SDL_SetRenderDrawColor(m_renderer, 40, 25, 15, 255);
+                    SDL_RenderDrawRect(m_renderer, &doorRect);
+                    SDL_Rect knob = {dsx + tsz - 6, dsy + tsz/2 - 2, 4, 4};
+                    SDL_SetRenderDrawColor(m_renderer, 200, 180, 50, 255);
+                    SDL_RenderFillRect(m_renderer, &knob);
                 }
             }
         }
@@ -1541,7 +1539,7 @@ void Renderer::drawWorldEntities(const NetworkClient& net, const Camera& cam,
         bool isDead = (rem.snap[1].statusFlags & STATUS_DEAD) != 0;
         // 좌비는 죽어도 y-sort에 포함 (시체 렌더링 위해)
         if (isDead && rem.recType != REC_ZOMBIE) continue;
-        if (rem.recType == 2 || rem.recType == 3) continue; // Skip LootBox & Buildings
+        if (rem.recType == REC_BUILDING || rem.recType == REC_LOOT) continue;
         float t  = std::min(1.0f, rem.interpT / std::max(rem.snapDt, 0.001f));
         float wy = rem.snap[0].y + (rem.snap[1].y - rem.snap[0].y) * t;
         list.push_back({wy, EntryType::RemoteEntity, i});
@@ -1576,6 +1574,17 @@ void Renderer::drawWorldEntities(const NetworkClient& net, const Camera& cam,
         }
         return -1;
     };
+    auto canSeeBuilding = [&](int buildingIdx) -> bool {
+        if (!map || buildingIdx < 0) return true;
+        const auto& b = map->getBuildings()[buildingIdx];
+        const float margin = TILE_SIZE * 2.0f;
+        const float bx = b.x * TILE_SIZE;
+        const float by = b.y * TILE_SIZE;
+        const float bw = b.w * TILE_SIZE;
+        const float bh = b.h * TILE_SIZE;
+        return localX >= bx - margin && localX <= bx + bw + margin &&
+               localY >= by - margin && localY <= by + bh + margin;
+    };
     int localBuildingIdx = getBuildingIdx(localX, localY);
 
     for (const auto& e : list) {
@@ -1590,14 +1599,14 @@ void Renderer::drawWorldEntities(const NetworkClient& net, const Camera& cam,
             // 지붕 은폐: 좀비가 건물 안에 있으면 로컬 플레이어도 같은 건물 안에 있어야 표시
             if (rem.recType == REC_ZOMBIE) {
                 int zi = getBuildingIdx(wx, wy);
-                if (zi >= 0 && zi != localBuildingIdx) continue; // 다른 건물 안 = 숨김
+                if (zi >= 0 && zi != localBuildingIdx && !canSeeBuilding(zi)) continue;
             }
             drawRemoteEntity(this, m_renderer, nullptr, rem, cam);
         } else if (e.type == EntryType::LootBox) {
             const auto& box = lootBoxes[e.idx];
-            // 지붕 은폐: 루트박스가 건물 안에 있으면 로컬 플레이어도 같은 건물 안이어야 표시
+            // 지붕 은폐: 집 안/근처에서는 내부 루트박스를 표시한다.
             int li = getBuildingIdx(box.wx, box.wy);
-            if (li >= 0 && li != localBuildingIdx) continue; // 다른 건물 안 = 숨김
+            if (li >= 0 && li != localBuildingIdx && !canSeeBuilding(li)) continue;
             drawLootBox(box, cam);
         } else if (e.type == EntryType::BuildingOverlay && map) {
             drawBuildingOverlay(map->getBuildings()[e.idx], cam);
@@ -2662,10 +2671,6 @@ void Renderer::drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY
             }
             drawText("제 작", btnX+BTN_W/2, btnY+14, {255,255,255,255}, fMd, true);
 
-            if (hov && mouseX>=btnX && mouseX<=btnX+BTN_W &&
-                       mouseY>=btnY && mouseY<=btnY+BTN_H) {
-                outClickedRecipe = rec.id;
-            }
         } else {
             SDL_SetRenderDrawColor(m_renderer, 60,30,30,255);
             SDL_Rect btnRect = {btnX, btnY, BTN_W, BTN_H};
@@ -3067,6 +3072,83 @@ void Renderer::drawBuildModeOverlay(bool active, int buildType,
     SDL_RenderDrawLine(m_renderer, 0, 82, m_screenW, 82);
 
     drawText(buf, m_screenW/2, 59, lineCol, f, true);
+}
+
+void Renderer::drawBuildRecipePanel(const ClientInventory& inv, int buildType) {
+    TTF_Font* fTitle = m_fonts.get(14);
+    TTF_Font* fMd    = m_fonts.get(12);
+    TTF_Font* fSm    = m_fonts.get(10);
+
+    struct BuildRecipeRow {
+        const char* name;
+        RecipeIngredient ingredients[3];
+        int ingredientCount;
+    };
+    const BuildRecipeRow rows[] = {
+        {"바리케이드", {{"scrap_metal", 2}, {"plank", 2}, {"", 0}}, 2},
+        {"포탑",       {{"electronic_part", 2}, {"oil", 2}, {"scrap_metal", 3}}, 3},
+        {"제작대",     {{"plank", 2}, {"", 0}, {"", 0}}, 1},
+    };
+
+    auto countItem = [&](const char* key) -> int {
+        int cnt = 0;
+        for (const auto& slot : inv.gridSlots) {
+            if (slot.isValid() && slot.name == key) cnt += slot.qty;
+        }
+        return cnt;
+    };
+
+    constexpr int W = 330;
+    constexpr int PAD = 12;
+    constexpr int ROW_H = 64;
+    constexpr int BUILD_RECIPE_COUNT = 3;
+    const int H = 46 + BUILD_RECIPE_COUNT * ROW_H + PAD;
+    const int x = std::max(12, m_screenW - W - 18);
+    const int y = 96;
+
+    drawPanel(x, y, W, H, {12,16,20,225}, {70,76,84,230}, 3);
+    drawText("건설 조합법", x + PAD, y + 12, {240,240,230,255}, fTitle);
+    drawText("B: 취소  V: 전환", x + W - PAD, y + 14, Col::TEXT_LO, fSm, true);
+
+    int rowY = y + 42;
+    for (int ri = 0; ri < BUILD_RECIPE_COUNT; ++ri) {
+        const BuildRecipeRow& rec = rows[ri];
+        bool canCraft = true;
+        for (int ii = 0; ii < rec.ingredientCount; ++ii) {
+            if (countItem(rec.ingredients[ii].key) < rec.ingredients[ii].qty) {
+                canCraft = false;
+                break;
+            }
+        }
+
+        const bool selected = (ri == buildType);
+        SDL_Color bg = selected ? SDL_Color{42,38,22,240}
+                                : canCraft ? SDL_Color{24,34,26,230}
+                                           : SDL_Color{32,24,24,230};
+        SDL_Color br = selected ? Col::ACCENT
+                                : canCraft ? SDL_Color{70,120,78,220}
+                                           : SDL_Color{100,54,54,220};
+        drawPanel(x + PAD, rowY, W - PAD * 2, ROW_H - 6, bg, br, 2);
+
+        char title[64];
+        std::snprintf(title, sizeof(title), "%s%s", selected ? "> " : "", rec.name);
+        drawText(title, x + PAD + 10, rowY + 7,
+                 canCraft ? SDL_Color{235,245,235,255} : SDL_Color{190,170,170,255}, fMd);
+
+        int matX = x + PAD + 10;
+        for (int ii = 0; ii < rec.ingredientCount; ++ii) {
+            const int have = countItem(rec.ingredients[ii].key);
+            const int need = rec.ingredients[ii].qty;
+            char mat[56];
+            std::snprintf(mat, sizeof(mat), "%s %d/%d",
+                          getDisplayName(rec.ingredients[ii].key), have, need);
+            drawText(mat, matX, rowY + 29,
+                     have >= need ? SDL_Color{95,220,120,255} : SDL_Color{235,90,80,255}, fSm);
+            matX += 92;
+        }
+
+        rowY += ROW_H;
+    }
 }
 
 

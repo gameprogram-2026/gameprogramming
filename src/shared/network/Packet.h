@@ -12,8 +12,8 @@ namespace dz {
 constexpr uint8_t PROTOCOL_VERSION   = 1;
 constexpr float   WORLD_TICK_RATE    = 20.0f;        // Hz — server authority rate
 constexpr float   WORLD_TICK_DT      = 1.0f / WORLD_TICK_RATE;
-constexpr float   RECONCILE_THRESHOLD = 9999.0f;     // 클라이언트 예측 우선 — snap 없음
-constexpr float   RECONCILE_HARD      = 9999.0f;     // 로컬호스트에서 순간이동 수준 오차 없음
+constexpr float   RECONCILE_THRESHOLD = 8.0f;         // Small prediction drift tolerance
+constexpr float   RECONCILE_HARD      = 64.0f;        // Snap when server/client diverge badly
 constexpr int     PREDICTION_BUFFER   = 128;         // max buffered unacked inputs
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +172,17 @@ struct SirenEventPacket {
     uint8_t  packetType = static_cast<uint8_t>(PacketType::S2C_SirenEvent);
 };
 
+struct DoorTogglePacket {
+    uint8_t  packetType = static_cast<uint8_t>(PacketType::C2S_DoorToggle);
+    uint16_t doorID     = 0;
+};
+
+struct DoorStatePacket {
+    uint8_t  packetType = static_cast<uint8_t>(PacketType::S2C_DoorState);
+    uint16_t doorID     = 0;
+    uint8_t  open       = 0;
+};
+
 // 클라이언트 → 서버: 파밍 (루트박스/시체) 획득 요청
 struct LootPickupPacket {
     uint8_t  packetType = static_cast<uint8_t>(PacketType::C2S_LootPickup);
@@ -200,7 +211,12 @@ struct HpSyncPacket {
 // ─────────────────────────────────────────────────────────────────────────────
 struct CraftRequestPacket {
     uint8_t packetType = static_cast<uint8_t>(PacketType::C2S_CraftRequest);
-    uint8_t recipeID   = 0; // 0=Barricade, 1=Turret
+    uint8_t recipeID   = 0; // Index into CRAFT_RECIPES
+};
+
+struct SelectWeaponPacket {
+    uint8_t packetType = static_cast<uint8_t>(PacketType::C2S_SelectWeapon);
+    uint8_t slot       = 0; // 0=primary, 1=secondary
 };
 
 // 클라이언트 → 서버: 건설 배치
