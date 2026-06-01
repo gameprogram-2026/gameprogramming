@@ -18,6 +18,8 @@ void GameLogic::processInput(uint32_t ownerID, const InputPacket& pkt) {
 
         if (weapon && weapon->key == "pistol_9mm") {
             handleRangedFire(ownerID, pkt.aimAngle);
+        } else if (weapon && weapon->key == "flamethrower") {
+            handleFlamethrowerBurst(ownerID, pkt.aimAngle);
         } else if (weapon && weapon->category == ItemCategory::Weapon) {
             handleMeleeAttack(ownerID);
         }
@@ -68,6 +70,33 @@ void GameLogic::handleFireThrow(uint32_t ownerID,
     auto* cbt = m_world.tryGet<CombatComponent>(e);
     if (cbt) cbt->emitNoise(NOISE_PISTOL_RADIUS, 3);
     DZ_LOG_INFO("[Logic] Molotov thrown by %u at (%.0f, %.0f)", ownerID, originX, originY);
+}
+
+void GameLogic::handleFlamethrowerBurst(uint32_t ownerID, float aimAngle) {
+    Entity e = findOwnedEntity(ownerID);
+    if (!e.isValid()) return;
+
+    auto* hp  = m_world.tryGet<HealthComponent>(e);
+    auto* xf  = m_world.tryGet<TransformComponent>(e);
+    auto* cbt = m_world.tryGet<CombatComponent>(e);
+    auto* inv = m_world.tryGet<InventoryComponent>(e);
+    if (!hp || !hp->isAlive || !xf || !cbt || !inv) return;
+    if (cbt->fireCooldown > 0.0f || cbt->isReloading) return;
+
+    const Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
+    if (!w.isValid() || w.key != "flamethrower") return;
+
+    constexpr float PI = 3.14159265f;
+    float rad  = aimAngle * (PI / 180.0f);
+    float dirX =  std::sin(rad);
+    float dirY = -std::cos(rad);
+
+    for (float dist : {48.0f, 80.0f, 112.0f, 144.0f}) {
+        m_fire.igniteAtWorld(xf->x + dirX * dist, xf->y + dirY * dist);
+    }
+
+    cbt->fireCooldown = 0.25f;
+    cbt->emitNoise(NOISE_RUN_RADIUS, 3);
 }
 
 void GameLogic::handleMeleeAttack(uint32_t ownerID) {

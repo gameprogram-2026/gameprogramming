@@ -400,14 +400,32 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
 }
 
 void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx) {
-    if (m_lobbyPlayers.find(peerIdx) == m_lobbyPlayers.end()) return;
-    auto& inv = m_lobbyPlayers[peerIdx].inv;
+    InventoryComponent* invPtr = nullptr;
+    bool inMatch = false;
+
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
+            invPtr = m_world.tryGet<InventoryComponent>(e);
+            inMatch = invPtr != nullptr;
+            break;
+        }
+    }
+
+    if (!invPtr) {
+        auto it = m_lobbyPlayers.find(peerIdx);
+        if (it == m_lobbyPlayers.end()) return;
+        invPtr = &it->second.inv;
+    }
+
+    auto& inv = *invPtr;
 
     auto getItemPtr = [&](uint8_t type, uint8_t idx) -> Item* {
         if (type == 0 && idx < INVENTORY_GRID_SLOTS) return &inv.slots[idx];
         if (type == 1 && idx == 0) return &inv.equipped[0];
         if (type == 2 && idx == 0) return &inv.equipped[1];
-        if (type == 3 && idx < 40) return &inv.stash[idx];
+        if (!inMatch && type == 3 && idx < 40) return &inv.stash[idx];
         return nullptr;
     };
 
@@ -415,7 +433,30 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
     Item* dst = getItemPtr(dstType, dstIdx);
 
     if (src && dst) {
-        std::swap(*src, *dst);
+        const bool dstIsEquip = (dstType == 1 || dstType == 2);
+        if (dstIsEquip && src->isValid() && src->category != ItemCategory::Weapon) return;
+
+        if (srcType == 0 && dstIsEquip && src->isValid() &&
+            src->category == ItemCategory::Weapon && !dst->isValid()) {
+            inv.equip(srcIdx, dstType == 1 ? EquipSlot::PrimaryWeapon : EquipSlot::SecondaryWeapon);
+        } else {
+            std::swap(*src, *dst);
+            inv.recalculateGridStats();
+        }
+
+        if (inMatch) {
+            sendInventorySyncToPeer(peerIdx);
+            if (auto* net = [&]() -> NetworkComponent* {
+                    for (EntityID id : m_world.alive()) {
+                        Entity e{id};
+                        auto* n = m_world.tryGet<NetworkComponent>(e);
+                        if (n && n->role == NetRole::LocallyOwned && n->ownerID == peerIdx) return n;
+                    }
+                    return nullptr;
+                }()) {
+                net->markDirty(DIRTY_INVENTORY);
+            }
+        }
     }
 }
 

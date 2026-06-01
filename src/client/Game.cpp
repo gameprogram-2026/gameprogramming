@@ -806,8 +806,10 @@ void Game::processEvents() {
 
     const auto& activeWeapon = m_inventory.primaryWeapon;
     const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
-    const bool isGun = hasWeapon && activeWeapon.name == "pistol_9mm";
-    if (!isGun) {
+    const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
+    const bool isFlamethrower = hasWeapon && activeWeapon.name == "flamethrower";
+    const bool isRanged = isPistol || isFlamethrower;
+    if (!isPistol) {
         m_curInput.actions &= ~ACT_RELOAD;
     }
 
@@ -816,12 +818,12 @@ void Game::processEvents() {
         if (!hasWeapon) {
             m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
         } else {
-            if (isGun) {
+            if (isRanged) {
                 m_curInput.actions &= ~ACT_MELEE;
             } else {
                 m_curInput.actions &= ~ACT_SHOOT;
             }
-            if (isGun && wpn.qty <= 0) {
+            if (isPistol && wpn.qty <= 0) {
                 // 잔탄 부족
                 m_curInput.actions &= ~ACT_SHOOT;
                 if (m_attackTimer <= 0.0f) {
@@ -832,12 +834,15 @@ void Game::processEvents() {
                 m_attackTimer = 0.35f; 
                 m_attackAngle = m_curInput.aimAngle; 
                 
-                if (isGun) {
+                if (isPistol) {
                     m_audio.playSound("shoot", 0.7f);
                     m_cameraShakeTimer = 0.15f;
                     m_cameraShakeIntensity = 6.0f;
                     m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
                     m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
+                } else if (isFlamethrower) {
+                    m_cameraShakeTimer = 0.08f;
+                    m_cameraShakeIntensity = 2.0f;
                 } else {
                     m_audio.playSound("swing", 0.8f);
                     m_cameraShakeTimer = 0.1f;
@@ -853,7 +858,10 @@ void Game::processEvents() {
     m_prevF = curF;
 
     bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
-    if (curQ && !m_prevQ) std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
+    if (curQ && !m_prevQ) {
+        std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
+        m_net.sendStashTransfer(1, 0, 2, 0);
+    }
     m_prevQ = curQ;
 
     static bool prevT = false;
@@ -916,8 +924,6 @@ void Game::processEvents() {
 void Game::processInventorySync() {
     if (m_net.hasInventorySync()) {
         const auto& sync = m_net.getInventorySync();
-        InventoryItem prevPrimary = m_inventory.primaryWeapon;
-        InventoryItem prevSecondary = m_inventory.secondaryWeapon;
         // 보존할 것: 스태시 (서버에서만 보내줌)
         ClientInventory newInv{};
         for (int i=0; i<40; ++i) newInv.stashSlots[i] = m_inventory.stashSlots[i];
@@ -945,22 +951,6 @@ void Game::processInventorySync() {
                 if (i == 0) newInv.primaryWeapon = eq;
                 if (i == 1) newInv.secondaryWeapon = eq;
             }
-        }
-        auto sameItem = [](const InventoryItem& a, const InventoryItem& b) {
-            return a.name == b.name && a.qty == b.qty && a.weight == b.weight;
-        };
-        if (prevPrimary.isValid() && prevSecondary.isValid() &&
-            sameItem(prevPrimary, newInv.secondaryWeapon) &&
-            sameItem(prevSecondary, newInv.primaryWeapon)) {
-            std::swap(newInv.primaryWeapon, newInv.secondaryWeapon);
-        }
-        if (!newInv.primaryWeapon.isValid() && prevPrimary.isValid()) {
-            newInv.primaryWeapon = prevPrimary;
-            totalW += prevPrimary.weight * prevPrimary.qty;
-        }
-        if (!newInv.secondaryWeapon.isValid() && prevSecondary.isValid()) {
-            newInv.secondaryWeapon = prevSecondary;
-            totalW += prevSecondary.weight * prevSecondary.qty;
         }
         newInv.totalWeight = totalW;
         m_inventory = newInv;
