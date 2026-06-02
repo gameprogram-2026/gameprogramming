@@ -2,6 +2,8 @@
 #include "shared/util/Logger.h"
 #include "shared/network/Packet.h"
 #include "shared/MapSetup.h"
+#include "shared/ItemData.h"
+#include "shared/ecs/components/BuildingComponent.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <cmath>
@@ -10,11 +12,6 @@
 #include <algorithm>
 
 namespace dz {
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 맵 상수
-// ─────────────────────────────────────────────────────────────────────────────
-static const float TILE_SZ = 32.0f;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Game constructor
@@ -35,13 +32,38 @@ Game::~Game() { shutdown(); }
 // tryInteract — send pickup or open workbench
 // ─────────────────────────────────────────────────────────────────────────────
 void Game::tryInteract() {
+    int doorID = m_map.findNearestDoor(m_net.localX(), m_net.localY(), TILE_SIZE * 2.0f);
+    if (doorID >= 0) {
+        const auto& door = m_map.getDoors()[doorID];
+        m_net.sendDoorToggle(static_cast<uint16_t>(doorID));
+        m_notifyMsg = door.open ? "문을 닫는 중..." : "문을 여는 중...";
+        m_notifyTimer = 1.0f;
+        return;
+    }
+
     if (m_nearestInteractNetID < 0) return;
     
-    if (m_nearestInteractType == 3) { // REC_LOOT equivalent is 3
-        m_net.sendLootPickup(static_cast<uint32_t>(m_nearestInteractNetID));
+    if (m_nearestInteractType == REC_LOOT) {
+        const int pickedNetID = m_nearestInteractNetID;
+        if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), pickedNetID) ==
+            m_clientHiddenNetIDs.end()) {
+            m_clientHiddenNetIDs.push_back(pickedNetID);
+        }
+        m_net.sendLootPickup(static_cast<uint32_t>(pickedNetID));
         m_audio.playSound("loot");
+        m_notifyMsg = "파밍 중...";
+        m_notifyTimer = 0.6f;
         m_nearestInteractNetID = -1; 
-    } else if (m_nearestInteractType == 2) { // REC_BUILDING equivalent is 2
+    } else if (m_nearestInteractType == REC_BUILDING) {
+        bool isWorkbench = false;
+        for (int i = 0; i < m_net.remoteCount(); ++i) {
+            const auto& rem = m_net.remotes()[i];
+            if (rem.entityID == m_nearestInteractNetID) {
+                isWorkbench = rem.snap[1].statusFlags == static_cast<uint8_t>(BuildingType::Workbench);
+                break;
+            }
+        }
+        if (!isWorkbench) return;
         m_showCrafting = !m_showCrafting;
         if (m_showCrafting) {
             m_notifyMsg = "제작대를 열었습니다.";
@@ -90,14 +112,14 @@ int Game::run(const std::string& serverHost, uint16_t port) {
     // 탈출존을 map.json에서 파싱된 값으로 동기화 (서버와 좌표 일치)
     m_extractionZones.clear();
     for (const auto& ez : m_map.getExtractionZones()) {
-        float cx = (ez.tileX + ez.w * 0.5f) * TILE_SZ;
-        float cy = (ez.tileY + ez.h * 0.5f) * TILE_SZ;
+        float cx = (ez.tileX + ez.w * 0.5f) * TILE_SIZE;
+        float cy = (ez.tileY + ez.h * 0.5f) * TILE_SIZE;
         m_extractionZones.push_back({cx, cy});
     }
     if (m_extractionZones.empty()) {
         // fallback: 맵 중앙 2곳
-        m_extractionZones.push_back({80 * TILE_SZ, 80 * TILE_SZ});
-        m_extractionZones.push_back({120 * TILE_SZ, 120 * TILE_SZ});
+        m_extractionZones.push_back({m_map.width() * TILE_SIZE * 0.5f,
+                                     m_map.height() * TILE_SIZE * 0.5f});
     }
 
     // 건물 외벽을 TileMap SOLID 타일로 마킹 (서버와 동일한 공유 함수 사용)
@@ -226,6 +248,8 @@ void Game::runLobby() {
             break;
         }
 
+        processInventoryMouse(); // Lobby stash/inventory owns clicks before GAME START.
+
         int mx, my;
         m_input.mousePos(mx, my);
 
@@ -259,8 +283,6 @@ void Game::runLobby() {
             m_matchmakingTimer = 0.0f;
             break;
         }
-
-        processInventoryMouse(); // Handles drag and drop in stash/inventory
 
         // macOS App Nap/Occlusion 시 VSync 블로킹이 풀려 뻗는 현상 방지
         SDL_Delay(1);
@@ -450,6 +472,19 @@ void Game::runIngame() {
         }
 
         update(dt);
+
+        if (m_net.consumeExtractionEvent()) {
+            m_notifyMsg.clear();
+            m_notifyTimer = 0.0f;
+            m_showInventory = false;
+            m_showCrafting = false;
+            m_buildMode = false;
+            m_drag = DragState{};
+            m_clientHiddenNetIDs.clear();
+            m_net.clearLocalNetID();
+            m_state = GameState::Lobby;
+            return;
+        }
 
         renderIngame();
 
@@ -652,35 +687,40 @@ void Game::useConsumable(int gridIdx) {
 // 인벤토리 마우스 — 드래그 앤 드롭 처리
 // ─────────────────────────────────────────────────────────────────────────────
 void Game::processInventoryMouse() {
-    int cx, cy, ux, uy;
-    bool clicked  = m_input.consumeClick(cx, cy);
-    bool released = m_input.consumeMouseUp(ux, uy);
-
     // ── 드래그 시작 (마우스 다운) ─────────────────────────────────────────────
-    if (clicked && !m_drag.active) {
+    if (!m_drag.active) {
+        int cx, cy;
         DragState::Src src; int gidx;
-        if (hitTestInventorySlot(cx, cy, src, gidx)) {
-            InventoryItem srcItem;
-            if (src == DragState::Src::Grid && gidx >= 0 && gidx < 20)
-                srcItem = m_inventory.gridSlots[gidx];
-            else if (src == DragState::Src::Primary)
-                srcItem = m_inventory.primaryWeapon;
-            else if (src == DragState::Src::Secondary)
-                srcItem = m_inventory.secondaryWeapon;
-            else if (src == DragState::Src::Stash && gidx >= 0 && gidx < 40)
-                srcItem = m_inventory.stashSlots[gidx];
+        if (!m_input.peekClick(cx, cy) || !hitTestInventorySlot(cx, cy, src, gidx)) {
+            return;
+        }
+        m_input.consumeClick(cx, cy);
 
-            if (srcItem.isValid()) {
-                m_drag.active  = true;
-                m_drag.src     = src;
-                m_drag.gridIdx = gidx;
-                m_drag.item    = srcItem;
-            }
+        InventoryItem srcItem;
+        if (src == DragState::Src::Grid && gidx >= 0 && gidx < 20)
+            srcItem = m_inventory.gridSlots[gidx];
+        else if (src == DragState::Src::Primary)
+            srcItem = m_inventory.primaryWeapon;
+        else if (src == DragState::Src::Secondary)
+            srcItem = m_inventory.secondaryWeapon;
+        else if (src == DragState::Src::Stash && gidx >= 0 && gidx < 40)
+            srcItem = m_inventory.stashSlots[gidx];
+
+        if (srcItem.isValid()) {
+            m_drag.active  = true;
+            m_drag.src     = src;
+            m_drag.gridIdx = gidx;
+            m_drag.item    = srcItem;
         }
     }
 
     // ── 드래그 완료 (마우스 업) ───────────────────────────────────────────────
-    if (released && m_drag.active) {
+    if (m_drag.active) {
+        int ux, uy;
+        bool released = m_input.consumeMouseUp(ux, uy);
+        if (!released) return;
+
+        DragState::Src src; int gidx;
         DragState::Src dstSrc; int dstIdx;
         bool validDrop = hitTestInventorySlot(ux, uy, dstSrc, dstIdx);
 
@@ -701,9 +741,13 @@ void Game::processInventoryMouse() {
 
                 // 무기 슬롯에는 무기만 허용
                 bool srcIsWeapon = ClientInventory::isWeaponItem(m_drag.item.name);
+                bool dstIsWeapon = dstItem.isValid() && ClientInventory::isWeaponItem(dstItem.name);
+                bool srcIsEquip  = (m_drag.src == DragState::Src::Primary ||
+                                    m_drag.src == DragState::Src::Secondary);
                 bool dstIsEquip  = (dstSrc == DragState::Src::Primary ||
                                     dstSrc == DragState::Src::Secondary);
-                bool canDrop = !dstIsEquip || srcIsWeapon;
+                bool canDrop = (!dstIsEquip || srcIsWeapon) &&
+                               (!srcIsEquip || !dstItem.isValid() || dstIsWeapon);
 
                 if (canDrop) {
                     // 소스에서 아이템 제거
@@ -747,8 +791,46 @@ void Game::processInventoryMouse() {
 // processCraftingMouse
 // ─────────────────────────────────────────────────────────────────────────────
 void Game::processCraftingMouse() {
-    // 새 조합 UI는 renderIngame()에서 drawCraftingUI 호출 시 outClickedRecipe로 처리됨
-    // 여기서는 ESC 외 특별한 처리 없음
+    int mouseX, mouseY;
+    if (!m_input.consumeClick(mouseX, mouseY)) return;
+
+    const int CW = 540, CH = 460;
+    const int boxX = m_camera.screenW / 2 - CW / 2;
+    const int boxY = m_camera.screenH / 2 - CH / 2;
+    const int ROW_H = 76;
+    const int PAD = 12;
+    const int BTN_W = 100, BTN_H = 46;
+
+    auto countItem = [&](const char* key) {
+        int cnt = 0;
+        for (const auto& slot : m_inventory.gridSlots) {
+            if (slot.isValid() && slot.name == key) cnt += slot.qty;
+        }
+        return cnt;
+    };
+
+    int recipeY = boxY + 66;
+    for (int ri = 0; ri < CRAFT_RECIPE_COUNT; ++ri) {
+        const CraftingRecipe& rec = CRAFT_RECIPES[ri];
+        bool canCraft = true;
+        for (int ii = 0; ii < rec.ingredientCount; ++ii) {
+            if (countItem(rec.ingredients[ii].key) < rec.ingredients[ii].qty) {
+                canCraft = false;
+                break;
+            }
+        }
+
+        const int btnX = boxX + CW - PAD - BTN_W - 8;
+        const int btnY = recipeY + ROW_H / 2 - BTN_H / 2 - 3;
+        if (canCraft && mouseX >= btnX && mouseX <= btnX + BTN_W &&
+            mouseY >= btnY && mouseY <= btnY + BTN_H) {
+            m_net.sendCraftRequest(rec.id);
+            m_notifyMsg = "조합 요청 전송 중...";
+            m_notifyTimer = 1.5f;
+            return;
+        }
+        recipeY += ROW_H;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -804,7 +886,45 @@ void Game::processEvents() {
         return;
     }
 
-    const auto& activeWeapon = m_inventory.primaryWeapon;
+    static bool prevB = false;
+    bool curB = m_input.isKeyDown(SDL_SCANCODE_B);
+    if (curB && !prevB) {
+        m_buildMode = !m_buildMode;
+        m_notifyMsg   = m_buildMode ? "건설 모드 ON - 클릭으로 설치" : "건설 모드 OFF";
+        m_notifyTimer = 2.0f;
+    }
+    prevB = curB;
+
+    static bool prevV = false;
+    bool curV = m_input.isKeyDown(SDL_SCANCODE_V);
+    if (curV && !prevV && m_buildMode) {
+        m_buildType = (m_buildType + 1) % 3;
+        m_notifyMsg   = m_buildType == 0 ? "건설: 바리케이드" : m_buildType == 1 ? "건설: 포탑" : "건설: 제작대";
+        m_notifyTimer = 1.5f;
+    }
+    prevV = curV;
+
+    if (m_buildMode) {
+        m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE | ACT_RELOAD);
+        int cx, cy;
+        if (m_input.consumeClick(cx, cy)) {
+            float wx = (cx - m_camera.screenW * 0.5f) / m_camera.zoom + m_camera.x;
+            float wy = (cy - m_camera.screenH * 0.5f) / m_camera.zoom + m_camera.y;
+            m_net.sendBuildPlace(static_cast<int16_t>(wx / 32.0f),
+                                 static_cast<int16_t>(wy / 32.0f),
+                                 static_cast<uint8_t>(m_buildType));
+        }
+        return;
+    }
+
+    if (m_hotbarSelected == 1 &&
+        (!m_inventory.secondaryWeapon.isValid() ||
+         !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
+        m_hotbarSelected = 0;
+    }
+    const auto& activeWeapon = (m_hotbarSelected == 1)
+                                 ? m_inventory.secondaryWeapon
+                                 : m_inventory.primaryWeapon;
     const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
     const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
     const bool isFlamethrower = hasWeapon && activeWeapon.name == "flamethrower";
@@ -824,9 +944,14 @@ void Game::processEvents() {
                 m_curInput.actions &= ~ACT_SHOOT;
             }
             if (isPistol && wpn.qty <= 0) {
-                // 잔탄 부족
                 m_curInput.actions &= ~ACT_SHOOT;
-                if (m_attackTimer <= 0.0f) {
+                int reserve = 0;
+                for (const auto& slot : m_inventory.gridSlots) {
+                    if (slot.isValid() && slot.name == "ammo_9mm") reserve += slot.qty;
+                }
+                if (reserve > 0) {
+                    m_curInput.actions |= ACT_RELOAD;
+                } else if (m_attackTimer <= 0.0f) {
                     m_attackTimer = 0.35f;
                     m_audio.playSound("dry_fire", 0.6f);
                 }
@@ -859,8 +984,17 @@ void Game::processEvents() {
 
     bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
     if (curQ && !m_prevQ) {
-        std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
-        m_net.sendStashTransfer(1, 0, 2, 0);
+        const bool primaryReady = m_inventory.primaryWeapon.isValid() &&
+                                  ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name);
+        const bool secondaryReady = m_inventory.secondaryWeapon.isValid() &&
+                                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name);
+        if (m_hotbarSelected == 0 && secondaryReady) {
+            m_hotbarSelected = 1;
+            m_net.sendSelectWeapon(1);
+        } else if (primaryReady) {
+            m_hotbarSelected = 0;
+            m_net.sendSelectWeapon(0);
+        }
     }
     m_prevQ = curQ;
 
@@ -874,35 +1008,6 @@ void Game::processEvents() {
     }
     prevT = curT;
 
-    static bool prevB = false;
-    bool curB = m_input.isKeyDown(SDL_SCANCODE_B);
-    if (curB && !prevB) {
-        m_buildMode = !m_buildMode;
-        m_notifyMsg   = m_buildMode ? "건설 모드 ON — 클릭으로 바리케이드 설치" : "건설 모드 OFF";
-        m_notifyTimer = 2.0f;
-    }
-    prevB = curB;
-
-    static bool prevV = false;
-    bool curV = m_input.isKeyDown(SDL_SCANCODE_V);
-    if (curV && !prevV && m_buildMode) {
-        m_buildType = (m_buildType + 1) % 3;
-        m_notifyMsg   = m_buildType == 0 ? "건설: 바리케이드" : m_buildType == 1 ? "건설: 포탑" : "건설: 제작대";
-        m_notifyTimer = 1.5f;
-    }
-    prevV = curV;
-
-    if (m_buildMode) {
-        int cx, cy;
-        if (m_input.consumeClick(cx, cy)) {
-            float wx = (cx - m_camera.screenW * 0.5f) / m_camera.zoom + m_camera.x;
-            float wy = (cy - m_camera.screenH * 0.5f) / m_camera.zoom + m_camera.y;
-            m_net.sendBuildPlace(static_cast<int16_t>(wx / 32.0f),
-                                 static_cast<int16_t>(wy / 32.0f),
-                                 static_cast<uint8_t>(m_buildType));
-        }
-    }
-
     static const SDL_Scancode NUM_SCANCODES[5] = {
         SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5
     };
@@ -911,16 +1016,22 @@ void Game::processEvents() {
     for (int i = 0; i < 5; ++i) {
         bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
         if (cur && !m_prevNum[i]) {
-            if (i == 1 && m_inventory.secondaryWeapon.isValid()) {
-                std::swap(m_inventory.primaryWeapon, m_inventory.secondaryWeapon);
-                m_net.sendStashTransfer(1, 0, 2, 0);
-                m_hotbarSelected = 0;
-            } else if (i == 0) {
-                m_hotbarSelected = 0;
+            if (i == 0) {
+                if (m_inventory.primaryWeapon.isValid() &&
+                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
+                    m_hotbarSelected = 0;
+                    m_net.sendSelectWeapon(0);
+                }
+            } else if (i == 1) {
+                if (m_inventory.secondaryWeapon.isValid() &&
+                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name)) {
+                    m_hotbarSelected = 1;
+                    m_net.sendSelectWeapon(1);
+                }
             } else {
                 m_hotbarSelected = i;
+                useConsumable(hotbarConsIdx[i-2]);
             }
-            if (i >= 2) useConsumable(hotbarConsIdx[i-2]);
         }
         m_prevNum[i] = cur;
     }
@@ -962,6 +1073,15 @@ void Game::processInventorySync() {
         }
         newInv.totalWeight = totalW;
         m_inventory = newInv;
+        if (m_hotbarSelected == 1 &&
+            (!m_inventory.secondaryWeapon.isValid() ||
+             !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
+                m_hotbarSelected = 0;
+                if (m_inventory.primaryWeapon.isValid() &&
+                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
+                    m_net.sendSelectWeapon(0);
+                }
+            }
         m_net.clearInventorySync();
     }
 
@@ -1087,31 +1207,53 @@ void Game::update(float dt) {
     float bestLootDist = INTERACT_RANGE * INTERACT_RANGE;
     float bestBuildingDist = INTERACT_RANGE * INTERACT_RANGE;
     int bestBuildingNetID = -1;
+    uint8_t bestBuildingType = static_cast<uint8_t>(BuildingType::Barricade);
     m_nearestInteractNetID = -1;
     m_nearestInteractType = 0;
+    m_interactPrompt.clear();
+
+    int doorID = m_map.findNearestDoor(lx, ly, TILE_SIZE * 2.0f);
+    if (doorID >= 0) {
+        const auto& door = m_map.getDoors()[doorID];
+        m_interactPrompt = door.open ? "[F] 문 닫기" : "[F] 문 열기";
+    }
 
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
+        if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), rem.entityID) !=
+            m_clientHiddenNetIDs.end()) {
+            continue;
+        }
         float dx = rem.snap[1].x - lx;
         float dy = rem.snap[1].y - ly;
         float d2 = dx*dx + dy*dy;
-        if (rem.recType == 3) { // REC_LOOT
+        if (rem.recType == REC_LOOT) {
             if (d2 < bestLootDist) {
                 bestLootDist = d2;
                 m_nearestInteractNetID = rem.entityID;
                 m_nearestInteractType  = rem.recType;
             }
-        } else if (rem.recType == 2) { // REC_BUILDING
-            if (d2 < bestBuildingDist) {
+        } else if (rem.recType == REC_BUILDING) {
+            const uint8_t buildingType = rem.snap[1].statusFlags;
+            if (buildingType == static_cast<uint8_t>(BuildingType::Workbench) &&
+                d2 < bestBuildingDist) {
                 bestBuildingDist = d2;
                 bestBuildingNetID = rem.entityID;
+                bestBuildingType = buildingType;
             }
         }
     }
 
     if (m_nearestInteractNetID < 0 && bestBuildingNetID >= 0) {
         m_nearestInteractNetID = bestBuildingNetID;
-        m_nearestInteractType = 2;
+        m_nearestInteractType = REC_BUILDING;
+    }
+
+    if (m_interactPrompt.empty() && m_nearestInteractNetID >= 0) {
+        m_interactPrompt = (m_nearestInteractType == REC_BUILDING &&
+                            bestBuildingType == static_cast<uint8_t>(BuildingType::Workbench))
+                             ? "[F] 제작대 사용"
+                             : "[F] 파밍";
     }
 }
 
@@ -1130,7 +1272,7 @@ void Game::renderIngame() {
     std::vector<LootBoxView> views;
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
-        if (rem.recType == 3 || rem.recType == 2) { // 3: REC_LOOT, 2: REC_BUILDING
+        if (rem.recType == REC_LOOT || rem.recType == REC_BUILDING) {
             if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), rem.entityID) != m_clientHiddenNetIDs.end()) {
                 continue; // 클라이언트가 이미 주운 아이템
             }
@@ -1139,7 +1281,7 @@ void Game::renderIngame() {
             v.wy = rem.snap[1].y;
             v.looted = false; 
             v.nearPlayer = (rem.entityID == m_nearestInteractNetID);
-            v.isBuilding = (rem.recType == 2); // Pass to Renderer
+            v.isBuilding = (rem.recType == REC_BUILDING);
             v.buildingType = rem.snap[1].statusFlags; // Assuming we can use statusFlags for buildingType?
             views.push_back(v);
         }
@@ -1152,23 +1294,25 @@ void Game::renderIngame() {
     bool  bleeding = m_net.localBleeding();
     bool  onFire   = m_net.localOnFire();
     int   teamID   = m_net.localTeam();
+    const InventoryItem& hudWeapon = (m_hotbarSelected == 1 && m_inventory.secondaryWeapon.isValid())
+                                       ? m_inventory.secondaryWeapon
+                                       : m_inventory.primaryWeapon;
     std::string wName;
-    if (m_inventory.primaryWeapon.isValid()) {
-        wName = m_inventory.primaryWeapon.name;
-        if (m_inventory.primaryWeapon.name == "pistol_9mm") {
+    if (hudWeapon.isValid()) {
+        wName = hudWeapon.name;
+        if (hudWeapon.name == "pistol_9mm") {
             int reserve = 0;
             for (const auto& slot : m_inventory.gridSlots) {
                 if (slot.isValid() && slot.name == "ammo_9mm") reserve += slot.qty;
             }
             char buf[64];
-            std::snprintf(buf, sizeof(buf), " (%d / %d)", m_inventory.primaryWeapon.qty, reserve);
+            std::snprintf(buf, sizeof(buf), " (%d / %d)", hudWeapon.qty, reserve);
             wName += buf;
         }
     } else {
         wName = "";
     }
-    const std::string& wGrade = m_inventory.primaryWeapon.isValid()
-                                  ? m_inventory.primaryWeapon.grade : "normal";
+    const std::string& wGrade = hudWeapon.isValid() ? hudWeapon.grade : "normal";
     m_renderer.drawWorldEntities(m_net, m_camera, &m_map, views,
                                   m_net.localX(), m_net.localY(),
                                   m_curInput.aimAngle, hpPct, bleeding || onFire,
@@ -1188,6 +1332,8 @@ void Game::renderIngame() {
 
     // 9. Siren Sound Check
     if (m_net.consumeSirenEvent()) {
+        m_zonesOpen = true;
+        m_extractCountdown = 0.0f;
         m_audio.playSound("siren", 0.8f, false);
     }
     // 6. HUD
@@ -1212,12 +1358,23 @@ void Game::renderIngame() {
     {
         int mx, my; m_input.mousePos(mx, my);
         m_renderer.drawBuildModeOverlay(m_buildMode, m_buildType, mx, my, m_camera);
+        if (m_buildMode) {
+            m_renderer.drawBuildRecipePanel(m_inventory, m_buildType);
+        }
     }
 
     // 7-c. 인게임 알림 메시지 (무게 초과 등)
     if (m_notifyTimer > 0.0f)
         m_renderer.drawNotification(m_notifyMsg, m_notifyTimer);
 
+    if (!m_interactPrompt.empty()) {
+        TTF_Font* f = m_renderer.debugFont();
+        int y = m_camera.screenH - 148;
+        m_renderer.drawText(m_interactPrompt, m_camera.screenW / 2 + 2, y + 2,
+                            {0, 0, 0, 180}, f, true);
+        m_renderer.drawText(m_interactPrompt, m_camera.screenW / 2, y,
+                            {255, 240, 160, 255}, f, true);
+    }
 
     // 8. 핫바 (항상 표시)
     {
@@ -1239,12 +1396,6 @@ void Game::renderIngame() {
         m_input.mousePos(mx, my);
         int clickedRecipe = -1;
         m_renderer.drawCraftingUI(m_inventory, mx, my, clickedRecipe);
-        // 클릭된 레시피 → 서버에 조합 요청
-        if (clickedRecipe >= 0) {
-            m_net.sendCraftRequest(static_cast<uint8_t>(clickedRecipe));
-            m_notifyMsg = "조합 요청 전송 중...";
-            m_notifyTimer = 1.5f;
-        }
     } else if (m_showFullMap) {
         m_renderer.drawFullMap(m_map, m_net, m_net.localX(), m_net.localY(), teamID, m_extractionZones);
     }

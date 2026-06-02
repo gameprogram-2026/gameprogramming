@@ -3,6 +3,8 @@
 
 namespace dz {
 
+constexpr int PISTOL_MAG_CAPACITY = 9;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Noise radii in world units (pixels). 1 tile = 32 px ≈ 1 metre.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ struct CombatComponent {
     float  fireCooldown   = 0.0f;
     int    ammoInMag      = 0;
     int    ammoReserve    = 0;
-    int    magCapacity    = 7;     ///< Max rounds per magazine (pistol default)
+    int    magCapacity    = PISTOL_MAG_CAPACITY; ///< Max rounds per magazine (pistol default)
     float  fireRate       = 0.3f;  ///< Seconds between shots
     float  reloadTime     = 2.0f;  ///< Seconds to reload
     float  reloadTimer    = 0.0f;

@@ -44,6 +44,8 @@ public:
 
     using JoinHandler    = std::function<void(uint32_t peerIdx)>;
     using StashTransferCB = std::function<void(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx)>;
+    using SelectWeaponCB = std::function<void(uint32_t peerIdx, uint8_t slot)>;
+    using DoorToggleCB = std::function<void(uint32_t peerIdx, uint16_t doorID)>;
 
     bool init(uint16_t port);
     void shutdown();
@@ -79,6 +81,8 @@ public:
     void onAuth(AuthHandler h)        { m_onAuth    = std::move(h); }
     void onJoinMatch(JoinHandler h)   { m_onJoin    = std::move(h); }
     void onStashTransfer(StashTransferCB h) { m_onStashTransfer = std::move(h); }
+    void onSelectWeapon(SelectWeaponCB h)   { m_onSelectWeapon = std::move(h); }
+    void onDoorToggle(DoorToggleCB h)       { m_onDoorToggle = std::move(h); }
     void onUseItem(UseItemCB h)       { m_onUseItem = std::move(h); }
     void onAlliancePropose(AllianceCB h){ m_onAlliance = std::move(h); }
     void onBuildPlace(BuildCB cb)        { m_onBuild = std::move(cb); }
@@ -102,6 +106,8 @@ private:
     AuthHandler     m_onAuth;
     JoinHandler     m_onJoin;
     StashTransferCB m_onStashTransfer;
+    SelectWeaponCB  m_onSelectWeapon;
+    DoorToggleCB    m_onDoorToggle;
     UseItemCB       m_onUseItem;
     AllianceCB      m_onAlliance;
     BuildCB         m_onBuild;

@@ -91,9 +91,8 @@ bool TextureCache::loadFromSheet(const std::string& key,
 //   [0,1]=ammo  [1,1]=medkit  [2,1]=bandage  [3,1]=food_can
 //
 // Sheet layout (sheet_materials.png, 4 cols x 3 rows):
-//   [0,0]=wood  [1,0]=metal  [2,0]=electronic  [3,0]=barricade_item
-//   [0,1]=rag   [1,1]=alcohol  [2,1]=rope  [3,1]=battery
-//   [0,2]=wire  [1,2]=wire2(skip) [2,2]=building_turret  [3,2]=empty
+//   [0,0]=plank/wood  [1,0]=scrap_metal  [2,0]=electronic_part
+//   [3,1]=oil
 // ─────────────────────────────────────────────────────────────────────────────
 void TextureCache::loadItemIcons() {
     const std::string wSheet = "assets/sprites/items/sheet_weapons.png";
@@ -104,10 +103,12 @@ void TextureCache::loadItemIcons() {
     // Sheet_weapons.png
     struct { const char* key; int col; int row; } weaponCells[] = {
         {"icon_scrap_pipe",    0, 0},
-        {"icon_axe",           1, 0},
+        {"icon_nail_bat",      1, 0},
+        {"icon_fire_axe",      1, 0},
         {"icon_pistol_9mm",    2, 0},
         {"icon_flamethrower",  3, 0},
-        {"icon_9mm_ammo",      0, 1},
+        {"icon_molotov",       3, 0},
+        {"icon_ammo_9mm",      0, 1},
         {"icon_medkit",        1, 1},
         {"icon_bandage",       2, 1},
         {"icon_food_can",      3, 1},
@@ -118,16 +119,11 @@ void TextureCache::loadItemIcons() {
     // Sheet_materials.png — 1024x1024, 4x3 rows
     const int MCW = 256, MCH = 341;
     struct { const char* key; int col; int row; } matCells[] = {
-        {"icon_wood_plank",     0, 0},
-        {"icon_metal_sheet",    1, 0},
-        {"icon_electronic",     2, 0},
-        {"icon_barricade_item", 3, 0},
-        {"icon_rag",            0, 1},
-        {"icon_alcohol",        1, 1},
-        {"icon_rope",           2, 1},
-        {"icon_battery",        3, 1},
-        {"icon_wire",           0, 2},
-        {"icon_turret_item",    2, 2},
+        {"icon_plank",           0, 0},
+        {"icon_wood",            0, 0},
+        {"icon_scrap_metal",     1, 0},
+        {"icon_electronic_part", 2, 0},
+        {"icon_oil",             3, 1},
     };
     for (auto& c : matCells)
         loadFromSheet(c.key, mSheet, MCW, MCH, c.col, c.row);

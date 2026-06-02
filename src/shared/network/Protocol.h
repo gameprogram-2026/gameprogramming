@@ -53,6 +53,7 @@ enum class PacketType : uint8_t {
     S2C_StashSync       = 0x07,
     C2S_StashTransfer   = 0x08,
     C2S_JoinMatch       = 0x09,
+    C2S_SelectWeapon    = 0x0A,
 
     // ── Game state ────────────────────────────────────────────────────────────
     C2S_Input           = 0x10,   ///< Client → server: player input this frame
@@ -103,6 +104,10 @@ enum class PacketType : uint8_t {
 
     // ── Global Events ─────────────────────────────────────────────────────────
     S2C_SirenEvent      = 0x76,
+
+    // ── Doors ─────────────────────────────────────────────────────────────────
+    C2S_DoorToggle      = 0x77,
+    S2C_DoorState       = 0x78,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

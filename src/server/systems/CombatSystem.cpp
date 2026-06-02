@@ -128,13 +128,16 @@ void CombatSystem::tickReloading(World& world, float dt) {
             cbt.reloadTimer = 0.0f;
             
             Entity e{cbtPool.owners()[i]};
+            auto* net = world.tryGet<NetworkComponent>(e);
+            if (net) net->markDirty(DIRTY_HEALTH);
+
             auto* inv = world.tryGet<InventoryComponent>(e);
             if (!inv) continue;
             
             Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
             if (!w.isValid() || w.key != "pistol_9mm") continue;
             
-            int magCapacity = 7;
+            int magCapacity = cbt.magCapacity > 0 ? cbt.magCapacity : PISTOL_MAG_CAPACITY;
             int needed = magCapacity - w.quantity;
             if (needed <= 0) continue;
             
@@ -153,9 +156,7 @@ void CombatSystem::tickReloading(World& world, float dt) {
             w.quantity += consumed;
             DZ_LOG_DEBUG("[Combat] Entity %u reloaded %d ammo. Current: %d", e.id, consumed, w.quantity);
             
-            auto* net = world.tryGet<NetworkComponent>(e);
             if (net) {
-                net->markDirty(DIRTY_HEALTH); // 상태 플래그 해제
                 net->markDirty(DIRTY_INVENTORY); // 탄약 갱신
             }
         }

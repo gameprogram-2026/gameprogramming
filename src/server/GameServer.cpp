@@ -13,6 +13,29 @@
 
 namespace dz {
 
+namespace {
+
+uint32_t itemIDForKey(const char* key) {
+    if (std::strcmp(key, "scrap_pipe") == 0)      return 1;
+    if (std::strcmp(key, "nail_bat") == 0)        return 2;
+    if (std::strcmp(key, "fire_axe") == 0)        return 3;
+    if (std::strcmp(key, "pistol_9mm") == 0)      return 4;
+    if (std::strcmp(key, "molotov") == 0)         return 5;
+    if (std::strcmp(key, "flamethrower") == 0)    return 6;
+    if (std::strcmp(key, "ammo_9mm") == 0)        return 10;
+    if (std::strcmp(key, "scrap_metal") == 0)     return 20;
+    if (std::strcmp(key, "plank") == 0)           return 21;
+    if (std::strcmp(key, "electronic_part") == 0) return 22;
+    if (std::strcmp(key, "oil") == 0)             return 23;
+    if (std::strcmp(key, "wood") == 0)            return 24;
+    if (std::strcmp(key, "medkit") == 0)          return 30;
+    if (std::strcmp(key, "bandage") == 0)         return 31;
+    if (std::strcmp(key, "food_can") == 0)        return 32;
+    return 0;
+}
+
+} // namespace
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constructor — wire all system callbacks
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,6 +47,8 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
     m_net.onAuth           ([this](uint32_t i, const char* u, const char* p, bool r) { onClientAuth(i, u, p, r); });
     m_net.onJoinMatch      ([this](uint32_t i)                       { onJoinMatch(i); });
     m_net.onStashTransfer  ([this](uint32_t i, uint8_t st, uint8_t si, uint8_t dt, uint8_t di) { onStashTransferReq(i, st, si, dt, di); });
+    m_net.onSelectWeapon   ([this](uint32_t i, uint8_t slot)         { onSelectWeaponReq(i, slot); });
+    m_net.onDoorToggle     ([this](uint32_t i, uint16_t doorID)      { onDoorToggleReq(i, doorID); });
     m_net.onUseItem        ([this](uint32_t i, const char* k)        { onUseItem(i, k); });
     m_net.onAlliancePropose([this](uint32_t i, uint8_t toTeam)       { onAllianceProposeReq(i, toTeam); });
     m_net.onBuildPlace     ([this](uint32_t i, int16_t tx, int16_t ty, uint8_t bt){ onBuildPlace(i,tx,ty,bt); });
@@ -185,10 +210,9 @@ void GameServer::tick(float dt) {
     m_extraction.update(m_world, dt, m_gameTime);
 
     // 좀비 리스폰 타이머 (10초마다 체크)
-    static float zombieSpawnTimer = 0.0f;
-    zombieSpawnTimer += dt;
-    if (zombieSpawnTimer >= 10.0f) {
-        zombieSpawnTimer = 0.0f;
+    m_zombieSpawnTimer += dt;
+    if (m_zombieSpawnTimer >= 10.0f) {
+        m_zombieSpawnTimer = 0.0f;
         spawnZombies(); // 내부에서 maxZombies 체크 후 부족하면 스폰
     }
 
@@ -407,6 +431,8 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
         if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
+            auto* hp = m_world.tryGet<HealthComponent>(e);
+            if (!hp || !hp->isAlive) continue;
             invPtr = m_world.tryGet<InventoryComponent>(e);
             inMatch = invPtr != nullptr;
             break;
@@ -433,8 +459,10 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
     Item* dst = getItemPtr(dstType, dstIdx);
 
     if (src && dst) {
+        const bool srcIsEquip = (srcType == 1 || srcType == 2);
         const bool dstIsEquip = (dstType == 1 || dstType == 2);
         if (dstIsEquip && src->isValid() && src->category != ItemCategory::Weapon) return;
+        if (srcIsEquip && dst->isValid() && dst->category != ItemCategory::Weapon) return;
 
         if (srcType == 0 && dstIsEquip && src->isValid() &&
             src->category == ItemCategory::Weapon && !dst->isValid()) {
@@ -453,15 +481,34 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
                         if (n && n->role == NetRole::LocallyOwned && n->ownerID == peerIdx) return n;
                     }
                     return nullptr;
-                }()) {
+            }()) {
                 net->markDirty(DIRTY_INVENTORY);
             }
+        } else {
+            inv.recalculateGridStats();
+            if (!m_peerUsernames[peerIdx].empty()) {
+                m_db.saveAccount(m_peerUsernames[peerIdx], inv);
+            }
+            sendInventorySyncToPeer(peerIdx);
+            sendStashSyncToPeer(peerIdx);
         }
     }
 }
 
 void GameServer::onJoinMatch(uint32_t peerIdx) {
     if (m_lobbyPlayers.find(peerIdx) == m_lobbyPlayers.end()) return;
+
+    for (EntityID id : m_world.alive()) {
+        Entity existing{id};
+        auto* net = m_world.tryGet<NetworkComponent>(existing);
+        if (!net || net->role != NetRole::LocallyOwned || net->ownerID != peerIdx) continue;
+
+        auto* hp = m_world.tryGet<HealthComponent>(existing);
+        if (hp && hp->isAlive) return;
+        m_world.destroyEntity(existing);
+    }
+    m_world.flushDestroyQueue();
+    m_net.setPeerNetID(peerIdx, 0);
     
     auto& lobbyPlayer = m_lobbyPlayers[peerIdx];
     InventoryComponent invToSpawn = lobbyPlayer.inv;
@@ -469,12 +516,31 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
     Entity e = m_world.createEntity();
     uint32_t netID = m_nextPlayerNetID++;
 
-    // 스폰 위치를 무작위로 변경하여 항상 같은 위치(구석)에서 태어나지 않도록 함
-    float spawnX = static_cast<float>((std::rand() % 96 + 16) * TILE_SIZE);
-    float spawnY = static_cast<float>((std::rand() % 96 + 16) * TILE_SIZE);
-
     int teamIdx = static_cast<int>(peerIdx / TEAM_SIZE); // 0-based
     if (teamIdx >= 4) teamIdx = 0;
+
+    int baseTileX = 5;
+    int baseTileY = 5;
+    const auto& spawns = m_map.getPlayerSpawns();
+    for (const auto& sp : spawns) {
+        if (sp.team == static_cast<uint8_t>(teamIdx + 1)) {
+            baseTileX = sp.x;
+            baseTileY = sp.y;
+            break;
+        }
+    }
+    if (spawns.empty()) {
+        const int maxTileX = m_map.width()  > 10 ? m_map.width()  - 6 : m_map.width()  - 1;
+        const int maxTileY = m_map.height() > 10 ? m_map.height() - 6 : m_map.height() - 1;
+        const int fallbackX[4] = {5, maxTileX, 5, maxTileX};
+        const int fallbackY[4] = {5, 5, maxTileY, maxTileY};
+        baseTileX = fallbackX[teamIdx];
+        baseTileY = fallbackY[teamIdx];
+    }
+    const int jitterX = static_cast<int>(peerIdx % TEAM_SIZE) * 2;
+    const int jitterY = static_cast<int>(peerIdx % TEAM_SIZE) * 2;
+    float spawnX = TileMap::tileCentre(baseTileX + (teamIdx % 2 == 0 ? jitterX : -jitterX));
+    float spawnY = TileMap::tileCentre(baseTileY + (teamIdx < 2 ? jitterY : -jitterY));
 
     auto& xf  = m_world.addComponent<TransformComponent>(e);
     xf.x      = spawnX;
@@ -494,15 +560,15 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
     // Starter weapon and items if empty
     if (inv.usedSlots == 0 && !inv.equipped[0].isValid()) {
         Item startWeapon;
-        startWeapon.itemID   = 1;
+        startWeapon.itemID   = 4;
         startWeapon.key      = "pistol_9mm";
         startWeapon.category = ItemCategory::Weapon;
-        startWeapon.quantity = 7;
+        startWeapon.quantity = PISTOL_MAG_CAPACITY;
         startWeapon.weight   = 1.5f;
         inv.addItem(startWeapon);
         
         Item medkit;
-        medkit.itemID   = 2;
+        medkit.itemID   = 30;
         medkit.key      = "medkit";
         medkit.category = ItemCategory::Consumable;
         medkit.quantity = 3;
@@ -510,7 +576,7 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
         inv.addItem(medkit);
 
         Item bandage;
-        bandage.itemID   = 3;
+        bandage.itemID   = 31;
         bandage.key      = "bandage";
         bandage.category = ItemCategory::Consumable;
         bandage.quantity = 5;
@@ -528,7 +594,8 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
     net.role   = NetRole::LocallyOwned;
 
     // Start with fully loaded pistol
-    cbt.ammoInMag = 7;
+    cbt.magCapacity = PISTOL_MAG_CAPACITY;
+    cbt.ammoInMag = PISTOL_MAG_CAPACITY;
     cbt.ammoReserve = 14;
 
     m_net.setPeerNetID(peerIdx, netID);
@@ -540,6 +607,7 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
     cAck.spawnY = xf.y;
     cAck.teamID = static_cast<uint8_t>(teamIdx + 1);
     m_net.sendReliable(peerIdx, &cAck, sizeof(cAck));
+    syncDoorStatesToPeer(peerIdx);
 
     // 시작 처리
     if (!m_gameStarted) {
@@ -559,15 +627,11 @@ void GameServer::onClientDisconnect(uint32_t peerIdx) {
         if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
-                // Drop items on disconnect
-                onDeathLoot(e);
-                // Clear inventory to wipe from DB
-                inv->slots.fill({});
-                inv->equipped.fill({});
-                inv->usedSlots = 0;
-                inv->currentWeight = 0;
                 if (!m_peerUsernames[peerIdx].empty()) {
                     m_db.saveAccount(m_peerUsernames[peerIdx], *inv);
+                }
+                if (m_lobbyPlayers.find(peerIdx) != m_lobbyPlayers.end()) {
+                    m_lobbyPlayers[peerIdx].inv = *inv;
                 }
             }
             m_world.destroyEntity(e);
@@ -622,20 +686,6 @@ void GameServer::onDamage(const DamageResult& result) {
             sendHpSyncToPeer(pi);
     }
 
-    // Betrayal detection
-    if (result.betrayal) {
-        // Find teams involved and break alliance
-        uint8_t teamA = 0, teamB = 0;
-        for (EntityID id : m_world.alive()) {
-            Entity e{id};
-            auto* net = m_world.tryGet<NetworkComponent>(e);
-            auto* hp  = m_world.tryGet<HealthComponent>(e);
-            if (!net || !hp) continue;
-            if (net->netID == result.attackerID) teamA = static_cast<uint8_t>(hp->team);
-            if (net->netID == result.victimID)   teamB = static_cast<uint8_t>(hp->team);
-        }
-        if (teamA && teamB) m_alliance.handleBetrayal(teamA, teamB);
-    }
 }
 
 void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
@@ -699,16 +749,19 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
         
         auto& linv = m_world.addComponent<InventoryComponent>(loot);
         Item item;
-        item.itemID = 1000 + (std::rand() % 1000);
         item.quantity = 1;
         int r = std::rand() % 4;
         if (r == 0) {
+            item.itemID = 31;
             item.key = "bandage"; item.category = ItemCategory::Consumable; item.weight = 0.3f;
         } else if (r == 1) {
+            item.itemID = 10;
             item.key = "ammo_9mm"; item.category = ItemCategory::Ammo; item.weight = 0.3f; item.quantity = 30;
         } else if (r == 2) {
-            item.key = "medkit"; item.category = ItemCategory::Consumable; item.weight = 0.5f;
+            item.itemID = 30;
+            item.key = "medkit"; item.category = ItemCategory::Consumable; item.weight = 1.0f;
         } else {
+            item.itemID = 20;
             item.key = "scrap_metal"; item.category = ItemCategory::BuildMaterial; item.weight = 1.0f; item.quantity = 1;
         }
         linv.addItem(item);
@@ -831,15 +884,19 @@ bool GameServer::loadMap(const std::string& path) {
     // 이 호출이 없으면 서버에 벽 충돌이 없어서 플레이어가 벽을 통과한다.
     applyBuildingCollisions(m_map);
 
-    // 탈출 지점 로드 (map.json을 무시하고 중앙 랜덤에 배치)
-    float tsz = static_cast<float>(TILE_SIZE);
-    
-    // 맵 중앙 부근에서 랜덤하게 탈출구 1개 배치
-    int tx = 30 + std::rand() % 20;
-    int ty = 30 + std::rand() % 20;
-    float cx = (tx + 0.5f) * tsz;
-    float cy = (ty + 0.5f) * tsz;
-    m_extraction.addZone({0, cx, cy, false});
+    m_extraction.clearZones();
+    const auto& zones = m_map.getExtractionZones();
+    if (!zones.empty()) {
+        for (const auto& ez : zones) {
+            float cx = (static_cast<float>(ez.tileX) + ez.w * 0.5f) * TILE_SIZE;
+            float cy = (static_cast<float>(ez.tileY) + ez.h * 0.5f) * TILE_SIZE;
+            m_extraction.addZone({ez.id, cx, cy, false});
+        }
+    } else {
+        float cx = (m_map.width() * 0.5f) * TILE_SIZE;
+        float cy = (m_map.height() * 0.5f) * TILE_SIZE;
+        m_extraction.addZone({0, cx, cy, false});
+    }
     
     m_extraction.onExtractionOpen([this]() {
         SirenEventPacket pkt{};
@@ -857,8 +914,46 @@ void GameServer::spawnZombies() {
     // 파밍 지역(건물 내부) 위주로 스폰 (안전 지역 확보)
     const auto& bds = m_map.getBuildings();
     if (!bds.empty()) {
+        std::vector<int> eligibleBuildings;
+        eligibleBuildings.reserve(bds.size());
+
+        auto playerInsideBuilding = [&](const TileMap::BuildingDef& bd) {
+            for (EntityID id : m_world.alive()) {
+                Entity e{id};
+                auto* net = m_world.tryGet<NetworkComponent>(e);
+                if (!net || net->role != NetRole::LocallyOwned) continue;
+                auto* hp = m_world.tryGet<HealthComponent>(e);
+                if (!hp || !hp->isAlive) continue;
+                auto* xf = m_world.tryGet<TransformComponent>(e);
+                if (!xf) continue;
+                int tx = TileMap::worldToTile(xf->x);
+                int ty = TileMap::worldToTile(xf->y);
+                if (tx >= bd.x && tx < bd.x + bd.w &&
+                    ty >= bd.y && ty < bd.y + bd.h) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto allDoorsClosed = [&](int buildingIdx) {
+            int doorCount = 0;
+            for (const auto& door : m_map.getDoors()) {
+                if (door.building != buildingIdx) continue;
+                ++doorCount;
+                if (door.open) return false;
+            }
+            return doorCount >= 4;
+        };
+
+        for (int i = 0; i < static_cast<int>(bds.size()); ++i) {
+            if (playerInsideBuilding(bds[i]) && allDoorsClosed(i)) continue;
+            eligibleBuildings.push_back(i);
+        }
+        if (eligibleBuildings.empty()) return;
+
         for (int i = 0; i < 15; ++i) { // 낮 좀비는 15마리만 실내 스폰 (개체수 대폭 축소)
-            const auto& bd = bds[std::rand() % bds.size()];
+            const auto& bd = bds[eligibleBuildings[std::rand() % eligibleBuildings.size()]];
             float bx = (bd.x + 1 + (std::rand() % std::max(1, bd.w - 2))) * TILE_SIZE;
             float by = (bd.y + 1 + (std::rand() % std::max(1, bd.h - 2))) * TILE_SIZE;
             ZombieType type = (std::rand() % 10 < 2) ? ZombieType::Runner : ZombieType::Shambler;
@@ -921,6 +1016,7 @@ void GameServer::spawnZombies() {
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::onUseItem(uint32_t peerIdx, const char* key) {
     if (m_logic) m_logic->handleUseItem(peerIdx, key);
+    sendInventorySyncToPeer(peerIdx);
     sendHpSyncToPeer(peerIdx);
 }
 
@@ -949,6 +1045,80 @@ void GameServer::onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam) {
 void GameServer::onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t btype) {
     if (m_logic) m_logic->handleBuildRequest(peerIdx, tileX, tileY,
                                               static_cast<BuildingType>(btype));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// onSelectWeaponReq — 장비 슬롯은 유지하고 활성 무기만 변경
+// ─────────────────────────────────────────────────────────────────────────────
+void GameServer::onSelectWeaponReq(uint32_t peerIdx, uint8_t slot) {
+    if (slot > 1) return;
+
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (!net || net->role != NetRole::LocallyOwned || net->ownerID != peerIdx) continue;
+
+        auto* inv = m_world.tryGet<InventoryComponent>(e);
+        if (!inv) return;
+
+        Item& selected = inv->equipped[slot];
+        if (!selected.isValid() || selected.category != ItemCategory::Weapon) return;
+
+        inv->activeWeaponSlot = (slot == 0) ? EquipSlot::PrimaryWeapon
+                                            : EquipSlot::SecondaryWeapon;
+        DZ_LOG_DEBUG("[Inventory] Player %u selected %s weapon: %s",
+                     peerIdx, slot == 0 ? "primary" : "secondary", selected.key.c_str());
+        sendInventorySyncToPeer(peerIdx);
+        return;
+    }
+}
+
+void GameServer::onDoorToggleReq(uint32_t peerIdx, uint16_t doorID) {
+    const auto& doors = m_map.getDoors();
+    if (doorID >= doors.size()) return;
+
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (!net || net->role != NetRole::LocallyOwned || net->ownerID != peerIdx) continue;
+        auto* xf = m_world.tryGet<TransformComponent>(e);
+        auto* hp = m_world.tryGet<HealthComponent>(e);
+        if (!xf || !hp || !hp->isAlive) return;
+
+        const auto& door = doors[doorID];
+        const float dx = TileMap::tileCentre(door.tx) - xf->x;
+        const float dy = TileMap::tileCentre(door.ty) - xf->y;
+        constexpr float INTERACT_RANGE = TILE_SIZE * 2.0f;
+        if (dx * dx + dy * dy > INTERACT_RANGE * INTERACT_RANGE) return;
+
+        if (m_map.toggleDoor(doorID)) {
+            const bool open = m_map.getDoors()[doorID].open;
+            DZ_LOG_INFO("[Door] Player %u %s door %u at (%d,%d)",
+                        peerIdx, open ? "opened" : "closed", doorID, door.tx, door.ty);
+            broadcastDoorState(doorID, open);
+        }
+        return;
+    }
+}
+
+void GameServer::sendDoorState(uint32_t peerIdx, uint16_t doorID, bool open) {
+    DoorStatePacket pkt{};
+    pkt.doorID = doorID;
+    pkt.open = open ? 1 : 0;
+    m_net.sendReliable(peerIdx, &pkt, sizeof(pkt));
+}
+
+void GameServer::broadcastDoorState(uint16_t doorID, bool open) {
+    DoorStatePacket pkt{};
+    pkt.doorID = doorID;
+    pkt.open = open ? 1 : 0;
+    m_net.broadcastReliable(&pkt, sizeof(pkt));
+}
+
+void GameServer::syncDoorStatesToPeer(uint32_t peerIdx) {
+    for (const auto& door : m_map.getDoors()) {
+        sendDoorState(peerIdx, door.id, door.open);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -996,11 +1166,15 @@ void GameServer::resetRound() {
     // 2. 타이머 초기화
     m_gameStarted = false;
     m_gameTimer = 0.0f;
+    m_zombieSpawnTimer = 0.0f;
     m_activePlayers = 0;
     m_gameTime = 0.0f; // 전체 서버 진행 시간 리셋
+    m_wasNight = false;
     
-    // 3. Extraction system 리셋
+    // 3. 라운드 중 변한 시스템/맵 상태 리셋
+    m_fire.reset();
     m_extraction.reset();
+    loadMap("data/map.json");
     
     // 4. 좀비, 루트박스 재생성
     spawnZombies();
@@ -1100,65 +1274,98 @@ void GameServer::onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID) {
 }
 
 void GameServer::sendInventorySyncToPeer(uint32_t peerIdx) {
+    auto sendInv = [&](const InventoryComponent& inv) {
+        InventorySyncPacket syncPkt{};
+        syncPkt.packetType = static_cast<uint8_t>(PacketType::S2C_InventorySync);
+        syncPkt.money = inv.money;
+        syncPkt.usedSlots = static_cast<uint8_t>(inv.usedSlots);
+        for (int i=0; i<INVENTORY_GRID_SLOTS; ++i) {
+            if (inv.slots[i].isValid()) {
+                syncPkt.gridSlots[i].itemID = inv.slots[i].itemID;
+                std::strncpy(syncPkt.gridSlots[i].key, inv.slots[i].key.c_str(), 19);
+                syncPkt.gridSlots[i].category = static_cast<uint8_t>(inv.slots[i].category);
+                syncPkt.gridSlots[i].quantity = inv.slots[i].quantity;
+                syncPkt.gridSlots[i].weight = inv.slots[i].weight;
+            }
+        }
+        for (int i=0; i<EQUIPMENT_SLOT_COUNT; ++i) {
+            if (inv.equipped[i].isValid()) {
+                syncPkt.equipped[i].itemID = inv.equipped[i].itemID;
+                std::strncpy(syncPkt.equipped[i].key, inv.equipped[i].key.c_str(), 19);
+                syncPkt.equipped[i].category = static_cast<uint8_t>(inv.equipped[i].category);
+                syncPkt.equipped[i].quantity = inv.equipped[i].quantity;
+                syncPkt.equipped[i].weight = inv.equipped[i].weight;
+            }
+        }
+        m_net.sendReliable(peerIdx, &syncPkt, sizeof(syncPkt));
+    };
+
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
         if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
-                InventorySyncPacket syncPkt{};
-                syncPkt.packetType = static_cast<uint8_t>(PacketType::S2C_InventorySync);
-                syncPkt.money = inv->money;
-                syncPkt.usedSlots = static_cast<uint8_t>(inv->usedSlots);
-                for (int i=0; i<INVENTORY_GRID_SLOTS; ++i) {
-                    if (inv->slots[i].isValid()) {
-                        syncPkt.gridSlots[i].itemID = inv->slots[i].itemID;
-                        std::strncpy(syncPkt.gridSlots[i].key, inv->slots[i].key.c_str(), 19);
-                        syncPkt.gridSlots[i].category = static_cast<uint8_t>(inv->slots[i].category);
-                        syncPkt.gridSlots[i].quantity = inv->slots[i].quantity;
-                        syncPkt.gridSlots[i].weight = inv->slots[i].weight;
-                    }
-                }
-                for (int i=0; i<EQUIPMENT_SLOT_COUNT; ++i) {
-                    if (inv->equipped[i].isValid()) {
-                        syncPkt.equipped[i].itemID = inv->equipped[i].itemID;
-                        std::strncpy(syncPkt.equipped[i].key, inv->equipped[i].key.c_str(), 19);
-                        syncPkt.equipped[i].category = static_cast<uint8_t>(inv->equipped[i].category);
-                        syncPkt.equipped[i].quantity = inv->equipped[i].quantity;
-                        syncPkt.equipped[i].weight = inv->equipped[i].weight;
-                    }
-                }
-                m_net.sendReliable(peerIdx, &syncPkt, sizeof(syncPkt));
+                sendInv(*inv);
                 return;
             }
         }
     }
+
+    auto it = m_lobbyPlayers.find(peerIdx);
+    if (it != m_lobbyPlayers.end()) {
+        sendInv(it->second.inv);
+    }
+}
+
+void GameServer::sendStashSyncToPeer(uint32_t peerIdx) {
+    auto it = m_lobbyPlayers.find(peerIdx);
+    if (it == m_lobbyPlayers.end()) return;
+
+    StashSyncPacket stashPkt{};
+    for (int i = 0; i < 40; ++i) {
+        const Item& item = it->second.inv.stash[i];
+        if (!item.isValid()) continue;
+        stashPkt.stashSlots[i].itemID = item.itemID;
+        std::strncpy(stashPkt.stashSlots[i].key, item.key.c_str(), 19);
+        stashPkt.stashSlots[i].category = static_cast<uint8_t>(item.category);
+        stashPkt.stashSlots[i].quantity = item.quantity;
+        stashPkt.stashSlots[i].weight = item.weight;
+    }
+    m_net.sendReliable(peerIdx, &stashPkt, sizeof(stashPkt));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // spawnLootBoxes
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::spawnLootBoxes() {
-    int totalBoxes = 50;
+    int totalBoxes = 120;
     int spawned = 0;
     
     struct LootItemDef { const char* key; ItemCategory cat; float weight; };
     auto getDrop = [&](int theme) -> std::pair<LootItemDef, int> {
         int roll = std::rand() % 100;
         if (theme == 0) { // Residential
-            if (roll < 40) return {{"bandage", ItemCategory::Consumable, 0.3f}, 2};
-            if (roll < 75) return {{"food_can", ItemCategory::Consumable, 0.5f}, 1};
+            if (roll < 25) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
+            if (roll < 45) return {{"food_can", ItemCategory::Consumable, 0.5f}, 2};
+            if (roll < 70) return {{"plank", ItemCategory::BuildMaterial, 0.8f}, 3};
+            if (roll < 85) return {{"scrap_metal", ItemCategory::BuildMaterial, 1.0f}, 2};
             if (roll < 95) return {{"scrap_pipe", ItemCategory::Weapon, 2.0f}, 1};
             return {{"medkit", ItemCategory::Consumable, 1.0f}, 1};
         } else if (theme == 1 || theme == 2) { // Commercial / Industrial
-            if (roll < 30) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
-            if (roll < 60) return {{"pistol_9mm", ItemCategory::Weapon, 1.5f}, 1};
-            if (roll < 80) return {{"ammo_9mm", ItemCategory::Ammo, 0.05f}, 14};
+            if (roll < 15) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
+            if (roll < 35) return {{"scrap_metal", ItemCategory::BuildMaterial, 1.0f}, 3};
+            if (roll < 50) return {{"plank", ItemCategory::BuildMaterial, 0.8f}, 3};
+            if (roll < 65) return {{"oil", ItemCategory::BuildMaterial, 1.2f}, 2};
+            if (roll < 78) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
+            if (roll < 92) return {{"ammo_9mm", ItemCategory::Ammo, 0.3f}, 30};
             return {{"fire_axe", ItemCategory::Weapon, 3.0f}, 1};
         } else { // Military
-            if (roll < 40) return {{"medkit", ItemCategory::Consumable, 1.0f}, 2};
-            if (roll < 70) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
-            if (roll < 90) return {{"ammo_9mm", ItemCategory::Ammo, 0.05f}, 30};
+            if (roll < 15) return {{"medkit", ItemCategory::Consumable, 1.0f}, 2};
+            if (roll < 35) return {{"electronic_part", ItemCategory::BuildMaterial, 0.5f}, 2};
+            if (roll < 50) return {{"oil", ItemCategory::BuildMaterial, 1.2f}, 3};
+            if (roll < 68) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
+            if (roll < 90) return {{"ammo_9mm", ItemCategory::Ammo, 0.3f}, 45};
             return {{"flamethrower", ItemCategory::Weapon, 5.0f}, 1};
         }
     };
@@ -1184,8 +1391,8 @@ void GameServer::spawnLootBoxes() {
         auto& inv = m_world.addComponent<InventoryComponent>(e);
         auto drop = getDrop(b.theme);
         Item item;
-        item.itemID = 100 + (std::rand() % 1000);
         item.key = drop.first.key;
+        item.itemID = itemIDForKey(drop.first.key);
         item.category = drop.first.cat;
         item.weight = drop.first.weight;
         item.quantity = drop.second;

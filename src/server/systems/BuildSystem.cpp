@@ -6,6 +6,7 @@
 #include "shared/ecs/components/InventoryComponent.h"
 #include "shared/ecs/components/CombatComponent.h"
 #include "shared/util/Logger.h"
+#include <algorithm>
 #include <cmath>
 
 namespace dz {
@@ -37,27 +38,62 @@ Entity BuildSystem::tryBuild(World& world, TileMap& map,
 
     // ── Material check ────────────────────────────────────────────────────────
     auto* inv = world.tryGet<InventoryComponent>(requester);
-    const char* matKey = nullptr;
-    int requiredQty = 1;
-    if (type == BuildingType::Barricade) { matKey = "barricade_item"; }
-    else if (type == BuildingType::Turret) { matKey = "turret_item"; }
-    else if (type == BuildingType::Workbench) { matKey = "wood_plank"; requiredQty = 2; }
-
-    if (inv && matKey) {
-        bool found = false;
+    auto totalQuantity = [inv](const char* key) {
+        int total = 0;
+        if (!inv) return total;
         for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
-            if (inv->slots[i].isValid() && inv->slots[i].key == matKey && inv->slots[i].quantity >= requiredQty) {
-                inv->slots[i].quantity -= requiredQty;
-                if (inv->slots[i].quantity <= 0)
-                    inv->removeItem(i);
-                found = true;
-                break;
+            if (inv->slots[i].isValid() && inv->slots[i].key == key)
+                total += inv->slots[i].quantity;
+        }
+        return total;
+    };
+    auto consumeItem = [inv](const char* key, int qty) {
+        if (!inv) return;
+        for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
+            if (!inv->slots[i].isValid() || inv->slots[i].key != key) continue;
+            int take = std::min(inv->slots[i].quantity, qty);
+            inv->slots[i].quantity -= take;
+            qty -= take;
+            if (inv->slots[i].quantity <= 0) {
+                inv->removeItem(i);
+                --i;
             }
+            if (qty <= 0) return;
         }
-        if (!found) {
-            DZ_LOG_DEBUG("[Build] Not enough material '%s' (need %d) in inventory", matKey, requiredQty);
+    };
+    auto requireItem = [&](const char* key, int qty) {
+        if (totalQuantity(key) < qty) {
+            DZ_LOG_DEBUG("[Build] Not enough material '%s' (need %d)", key, qty);
+            return false;
+        }
+        return true;
+    };
+
+    if (inv) {
+        bool hasMaterials = true;
+        if (type == BuildingType::Barricade) {
+            hasMaterials = requireItem("scrap_metal", 2) &&
+                           requireItem("plank", 2);
+            if (hasMaterials) {
+                consumeItem("scrap_metal", 2);
+                consumeItem("plank", 2);
+            }
+        } else if (type == BuildingType::Turret) {
+            hasMaterials = requireItem("electronic_part", 2) &&
+                           requireItem("oil", 2) &&
+                           requireItem("scrap_metal", 3);
+            if (hasMaterials) {
+                consumeItem("electronic_part", 2);
+                consumeItem("oil", 2);
+                consumeItem("scrap_metal", 3);
+            }
+        } else if (type == BuildingType::Workbench) {
+            hasMaterials = requireItem("plank", 2);
+            if (hasMaterials)
+                consumeItem("plank", 2);
+        }
+        if (!hasMaterials)
             return Entity{NULL_ENTITY};
-        }
     }
 
     // ── Spawn building entity ─────────────────────────────────────────────────

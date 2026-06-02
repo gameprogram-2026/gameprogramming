@@ -327,6 +327,15 @@ void NetworkClient::update(float dt) {
                         std::memcpy(&upd, ev.packet->data, sizeof(upd));
                         m_extractProg = upd.progress;
                     }
+                } else if (ptype == PacketType::S2C_ExtractionResult) {
+                    if (ev.packet->dataLength >= sizeof(ExtractionPacket)) {
+                        ExtractionPacket pkt{};
+                        std::memcpy(&pkt, ev.packet->data, sizeof(pkt));
+                        if (pkt.playerID == m_localNetID) {
+                            m_hasExtractionEvent = true;
+                            m_extractProg = 0.0f;
+                        }
+                    }
                 } else if (ptype == PacketType::S2C_InventorySync) {
                     if (ev.packet->dataLength >= sizeof(InventorySyncPacket)) {
                         std::memcpy(&m_invSyncPkt, ev.packet->data, sizeof(m_invSyncPkt));
@@ -336,6 +345,12 @@ void NetworkClient::update(float dt) {
                     if (ev.packet->dataLength >= sizeof(StashSyncPacket)) {
                         std::memcpy(&m_stashSyncPkt, ev.packet->data, sizeof(m_stashSyncPkt));
                         m_hasStashSync = true;
+                    }
+                } else if (ptype == PacketType::S2C_DoorState) {
+                    if (ev.packet->dataLength >= sizeof(DoorStatePacket)) {
+                        DoorStatePacket pkt{};
+                        std::memcpy(&pkt, ev.packet->data, sizeof(pkt));
+                        if (m_map) m_map->setDoorOpen(pkt.doorID, pkt.open != 0);
                     }
                 } else if (ptype == PacketType::S2C_TurretFire) {
                     if (ev.packet->dataLength >= sizeof(TurretFirePacket)) {
@@ -515,6 +530,17 @@ void NetworkClient::reconcile(uint16_t ackedSeq, float serverX, float serverY) {
         replayInputsFrom(ackedSeq + 1);
         return;
     }
+
+    float dx = serverX - m_localX;
+    float dy = serverY - m_localY;
+    float err = std::sqrt(dx*dx + dy*dy);
+    if (err >= RECONCILE_HARD) {
+        DZ_LOG_DEBUG("[CSP] Hard correction %.1f px without buffered seq %u", err, ackedSeq);
+        m_localX = serverX;
+        m_localY = serverY;
+        m_predHead = 0;
+        m_predCount = 0;
+    }
 }
 
 void NetworkClient::replayInputsFrom(uint32_t fromSeq) {
@@ -658,6 +684,23 @@ void NetworkClient::sendStashTransfer(uint8_t srcType, uint8_t srcIdx, uint8_t d
     pkt.srcIdx = srcIdx;
     pkt.dstType = dstType;
     pkt.dstIdx = dstIdx;
+    ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(m_peer, CHAN_RELIABLE, ep);
+}
+
+void NetworkClient::sendSelectWeapon(uint8_t slot) {
+    if (!m_peer) return;
+    SelectWeaponPacket pkt{};
+    pkt.slot = slot;
+    ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(m_peer, CHAN_RELIABLE, ep);
+    DZ_LOG_DEBUG("[Client] SelectWeapon sent: slot=%u", slot);
+}
+
+void NetworkClient::sendDoorToggle(uint16_t doorID) {
+    if (!m_peer) return;
+    DoorTogglePacket pkt{};
+    pkt.doorID = doorID;
     ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
     enet_peer_send(m_peer, CHAN_RELIABLE, ep);
 }
