@@ -60,13 +60,13 @@ struct ClientInventory {
     InventoryItem secondaryWeapon;
     int           money        = 0;
     float         totalWeight  = 0.0f;
-    float         maxWeight    = 999.0f;
+    float         maxWeight    = 150.0f;
     int           usedSlots    = 0;
 
     // 이름 기반 무기 판별 (grade 기반 금지 — 구급상자 등 오장착 방지)
     static bool isWeaponItem(const std::string& name) {
         static const char* WEAPON_KEYS[] = {
-            "pipe", "bat", "axe", "pistol", "rifle", "shotgun", "flamethrower", "knife"
+            "pipe", "bat", "axe", "pistol", "smg", "rifle", "shotgun", "flamethrower", "knife"
         };
         for (auto* k : WEAPON_KEYS) {
             if (name.find(k) != std::string::npos) return true;
@@ -108,7 +108,8 @@ struct ClientInventory {
 struct LootBoxView {
     float wx, wy;
     bool  looted     = false;
-    bool  nearPlayer = false;
+    bool  nearPlayer = false; // F키 힌트 표시 여부
+    bool  blocked    = false; // 인벤토리 가득 참 등으로 파밍 불가
     bool  isBuilding = false;
     uint8_t buildingType = 0;
     uint8_t turretDir    = 0; ///< 0=N 1=E 2=S 3=W (포탑 전용)
@@ -156,7 +157,7 @@ public:
     // ── 인게임 ────────────────────────────────────────────────────────────────
     void drawTileMap(const TileMap& map, const Camera& cam, float localX, float localY);
     void drawFire(const std::vector<std::pair<int,int>>& fires, const Camera& cam);
-    void drawLootBoxes(const std::vector<LootBoxView>& boxes, const Camera& cam);
+    void drawBuildingEntitiesOverlay(const std::vector<LootBoxView>& boxes, const Camera& cam);
     /// 로컬 플레이어 + 원격 엔티티 + 건물 루프/벽 + 상자를 y-sort 후 한 번에 그림 (입체감 핵심)
     void drawWorldEntities(const NetworkClient& net, const Camera& cam,
                            const class TileMap* map,
@@ -188,7 +189,8 @@ public:
                  bool isReloading = false);          ///< 장전 중 여부
 
     void drawBuildModeOverlay(bool active, int buildType, int mouseX, int mouseY,
-                              const Camera& cam, int turretDir = 0);
+                              const Camera& cam, const TileMap* map = nullptr,
+                              int turretDir = 0);
     void drawBuildRecipePanel(const ClientInventory& inv, int buildType);
     void drawExtractionZones(const Camera& cam,
                              const std::vector<std::pair<float,float>>& zones,
@@ -200,6 +202,8 @@ public:
     /// dragItem: 드래그 중인 아이템 (nullptr이면 드래그 없음)
     void drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
                        const InventoryItem* dragItem = nullptr, bool showStash = false);
+    void drawDropQuantityDialog(const InventoryItem& item, int quantity,
+                                int mouseX, int mouseY);
 
     /// 제작대 UI
     void drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY, int& outClickedRecipe, int scrollOffset = 0);

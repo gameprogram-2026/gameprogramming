@@ -350,7 +350,16 @@ void NetworkClient::update(float dt) {
                     if (ev.packet->dataLength >= sizeof(DoorStatePacket)) {
                         DoorStatePacket pkt{};
                         std::memcpy(&pkt, ev.packet->data, sizeof(pkt));
-                        if (m_map) m_map->setDoorOpen(pkt.doorID, pkt.open != 0);
+                        if (m_map) {
+                            if (pkt.broken) m_map->setDoorBroken(pkt.doorID, true);
+                            else {
+                                const auto& doors = m_map->getDoors();
+                                if (pkt.doorID < doors.size() && doors[pkt.doorID].broken) {
+                                    m_map->setDoorBroken(pkt.doorID, false);
+                                }
+                                m_map->setDoorOpen(pkt.doorID, pkt.open != 0);
+                            }
+                        }
                     }
                 } else if (ptype == PacketType::S2C_TurretFire) {
                     if (ev.packet->dataLength >= sizeof(TurretFirePacket)) {
@@ -679,6 +688,25 @@ void NetworkClient::sendLootPickup(uint32_t lootNetID) {
     LootPickupPacket pkt{};
     pkt.packetType = static_cast<uint8_t>(PacketType::C2S_LootPickup);
     pkt.lootNetID  = lootNetID;
+    ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(m_peer, CHAN_RELIABLE, ep);
+}
+
+void NetworkClient::sendItemDrop(uint8_t srcType, uint8_t srcIdx, uint16_t quantity) {
+    if (!m_peer || quantity == 0) return;
+    ItemDropPacket pkt{};
+    pkt.srcType = srcType;
+    pkt.srcIdx = srcIdx;
+    pkt.quantity = quantity;
+    ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(m_peer, CHAN_RELIABLE, ep);
+}
+
+void NetworkClient::sendDismantleItem(uint8_t srcType, uint8_t srcIdx) {
+    if (!m_peer) return;
+    DismantleItemPacket pkt{};
+    pkt.srcType = srcType;
+    pkt.srcIdx = srcIdx;
     ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
     enet_peer_send(m_peer, CHAN_RELIABLE, ep);
 }

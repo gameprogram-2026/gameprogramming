@@ -96,7 +96,11 @@ private:
     // 파밍 및 상호작용
     int     m_nearestInteractNetID = -1;
     uint8_t m_nearestInteractType  = 0; // 0=None, 1=Loot, 2=Building
-    std::vector<int> m_clientHiddenNetIDs; // 줍기 성공 후 즉시 숨길 아이템들
+    struct PendingHiddenLoot {
+        int netID = -1;
+        uint32_t expiresAtMs = 0;
+    };
+    std::vector<PendingHiddenLoot> m_clientHiddenNetIDs; // 파밍 요청 직후 짧게 숨김
 
     // 인벤토리 & UI 상태
     ClientInventory m_inventory;
@@ -109,10 +113,25 @@ private:
 
     // 드래그 앤 드롭
     DragState m_drag;
+    struct DropDialogState {
+        bool active = false;
+        DragState::Src src = DragState::Src::None;
+        int gridIdx = -1;
+        InventoryItem item;
+        int quantity = 1;
+    } m_dropDialog;
+    struct DismantleConfirmState {
+        bool active = false;
+        DragState::Src src = DragState::Src::None;
+        int gridIdx = -1;
+        std::string itemName;
+        uint32_t expiresAtMs = 0;
+    } m_dismantleConfirm;
 
     // 핫바
     int  m_hotbarSelected = 0;    ///< 0-4 (슬롯 1-5)
     bool m_prevQ          = false;
+    bool m_prevX          = false;
 
     // 이전 F/I/숫자키 상태 (엣지 트리거용)
     bool  m_prevF  = false;
@@ -137,6 +156,7 @@ private:
     std::string     m_notifyMsg;
     float           m_notifyTimer = 0.0f;
     std::string     m_interactPrompt;
+    bool            m_interactPromptBlocked = false;
 
     // Login State
     std::string     m_username;
@@ -150,7 +170,7 @@ private:
     
     // 건설 모드
     bool        m_buildMode    = false;
-    int         m_buildType    = 0;   // 0=바리케이드, 1=포탑, 2=제작대
+    int         m_buildType    = 0;   // 0=바리케이드, 1=포탑, 2=제작대, 3=문
 
     // UI Toggles
     bool        m_showFullMap  = false;
