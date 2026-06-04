@@ -2,6 +2,7 @@ import wave
 import struct
 import random
 import math
+from pathlib import Path
 
 def generate_sound(filename, duration, gen_sample):
     sample_rate = 44100
@@ -50,7 +51,8 @@ def gen_siren(i, num_samples, sr):
     env = math.sin((i / num_samples) * math.pi)
     return osc * env * 15000
 
-generate_sound('/Users/gimseongjun/Desktop/DeadZone/assets/sounds/shoot.wav', 0.4, gen_shoot)
-generate_sound('/Users/gimseongjun/Desktop/DeadZone/assets/sounds/swing.wav', 0.3, gen_swing)
-generate_sound('/Users/gimseongjun/Desktop/DeadZone/assets/sounds/hit.wav', 0.2, gen_hit)
-generate_sound('/Users/gimseongjun/Desktop/DeadZone/assets/sounds/siren.wav', 3.0, gen_siren)
+sound_dir = Path(__file__).resolve().parent
+generate_sound(str(sound_dir / 'shoot.wav'), 0.4, gen_shoot)
+generate_sound(str(sound_dir / 'swing.wav'), 0.3, gen_swing)
+generate_sound(str(sound_dir / 'hit.wav'), 0.2, gen_hit)
+generate_sound(str(sound_dir / 'siren.wav'), 3.0, gen_siren)

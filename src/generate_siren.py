@@ -1,6 +1,7 @@
 import wave
 import struct
 import math
+from pathlib import Path
 
 def generate_siren(filename, duration, sr=44100):
     num_samples = int(sr * duration)
@@ -17,4 +18,5 @@ def generate_siren(filename, duration, sr=44100):
             f.writeframesraw(struct.pack('<h', sample))
 
 if __name__ == '__main__':
-    generate_siren('/Users/gimseongjun/Desktop/DeadZone/assets/sounds/siren.wav', 3.0)
+    repo_root = Path(__file__).resolve().parents[1]
+    generate_siren(str(repo_root / 'assets' / 'sounds' / 'siren.wav'), 3.0)

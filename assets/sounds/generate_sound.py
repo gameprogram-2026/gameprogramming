@@ -2,12 +2,14 @@ import wave
 import struct
 import random
 import math
+from pathlib import Path
 
 sample_rate = 44100
 duration = 0.15 # 150ms
 num_samples = int(sample_rate * duration)
 
-with wave.open('/Users/gimseongjun/Desktop/DeadZone/assets/sounds/footstep.wav', 'w') as f:
+sound_dir = Path(__file__).resolve().parent
+with wave.open(str(sound_dir / 'footstep.wav'), 'w') as f:
     f.setnchannels(1) # mono
     f.setsampwidth(2) # 16-bit
     f.setframerate(sample_rate)
