@@ -181,12 +181,27 @@ struct DoorStatePacket {
     uint8_t  packetType = static_cast<uint8_t>(PacketType::S2C_DoorState);
     uint16_t doorID     = 0;
     uint8_t  open       = 0;
+    uint8_t  broken     = 0;
 };
 
 // 클라이언트 → 서버: 파밍 (루트박스/시체) 획득 요청
 struct LootPickupPacket {
     uint8_t  packetType = static_cast<uint8_t>(PacketType::C2S_LootPickup);
     uint32_t lootNetID  = 0;
+};
+
+// 클라이언트 → 서버: 인벤토리 아이템을 월드에 버림
+struct ItemDropPacket {
+    uint8_t  packetType = static_cast<uint8_t>(PacketType::C2S_ItemDrop);
+    uint8_t  srcType    = 0; // 0=Grid, 1=Primary, 2=Secondary
+    uint8_t  srcIdx     = 0;
+    uint16_t quantity   = 1;
+};
+
+struct DismantleItemPacket {
+    uint8_t packetType = static_cast<uint8_t>(PacketType::C2S_DismantleItem);
+    uint8_t srcType    = 0; // 0=Grid, 1=Primary, 2=Secondary
+    uint8_t srcIdx     = 0;
 };
 
 // 클라이언트 → 서버: 소모품 사용

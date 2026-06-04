@@ -109,6 +109,8 @@ enum class PacketType : uint8_t {
     C2S_DoorToggle      = 0x77,
     S2C_DoorState       = 0x78,
     S2C_CraftAck        = 0x79,   ///< 조합 결과 (성공/실패 이유)
+    C2S_ItemDrop        = 0x7A,
+    C2S_DismantleItem   = 0x7B,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

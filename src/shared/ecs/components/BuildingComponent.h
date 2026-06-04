@@ -10,6 +10,7 @@ enum class BuildingType : uint8_t {
     Barricade = 0,   ///< Wood — solid, flammable, burns immediately on fire contact
     Turret    = 1,   ///< Metal — solid, fire contact → oil explosion
     Workbench = 2,   ///< Crafting station
+    Door      = 3,   ///< Repair a broken house door
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

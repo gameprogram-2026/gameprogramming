@@ -10,10 +10,19 @@
 #include <thread>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 namespace dz {
 
 namespace {
+
+constexpr int DAY_ZOMBIE_TARGET = 60;
+constexpr int NIGHT_ZOMBIE_TARGET = 85;
+constexpr int MAX_ZOMBIE_SPAWN_BATCH = 18;
+constexpr int NIGHT_WAVE_BASE = 8;
+constexpr int NIGHT_WAVE_PER_PLAYER = 3;
 
 uint32_t itemIDForKey(const char* key) {
     if (std::strcmp(key, "scrap_pipe") == 0)      return 1;
@@ -22,6 +31,7 @@ uint32_t itemIDForKey(const char* key) {
     if (std::strcmp(key, "pistol_9mm") == 0)      return 4;
     if (std::strcmp(key, "molotov") == 0)         return 5;
     if (std::strcmp(key, "flamethrower") == 0)    return 6;
+    if (std::strcmp(key, "smg_9mm") == 0)         return 7;
     if (std::strcmp(key, "ammo_9mm") == 0)        return 10;
     if (std::strcmp(key, "scrap_metal") == 0)     return 20;
     if (std::strcmp(key, "plank") == 0)           return 21;
@@ -32,6 +42,18 @@ uint32_t itemIDForKey(const char* key) {
     if (std::strcmp(key, "bandage") == 0)         return 31;
     if (std::strcmp(key, "food_can") == 0)        return 32;
     return 0;
+}
+
+int countLivingZombies(World& world) {
+    int count = 0;
+    for (EntityID id : world.alive()) {
+        Entity e{id};
+        auto* ai = world.tryGet<ZombieAIComponent>(e);
+        if (!ai) continue;
+        auto* hp = world.tryGet<HealthComponent>(e);
+        if (hp && hp->isAlive) ++count;
+    }
+    return count;
 }
 
 } // namespace
@@ -54,6 +76,8 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
     m_net.onBuildPlace     ([this](uint32_t i, int16_t tx, int16_t ty, uint8_t bt, uint8_t dir){ onBuildPlace(i,tx,ty,bt,dir); });
     m_net.onCraft          ([this](uint32_t i, uint8_t recipeID)     { onCraftRequest(i, recipeID); });
     m_net.onLootPickup     ([this](uint32_t i, uint32_t nid)         { onLootPickupReq(i, nid); });
+    m_net.onItemDrop       ([this](uint32_t i, uint8_t st, uint8_t si, uint16_t q) { onItemDropReq(i, st, si, q); });
+    m_net.onDismantle      ([this](uint32_t i, uint8_t st, uint8_t si) { onDismantleReq(i, st, si); });
 
     // ── MySQL 연결 설정 ──────────────────────────────────────────────────────
     // 환경변수로 DB 비밀번호를 주입받는 것이 권장 방법.
@@ -200,7 +224,9 @@ void GameServer::applyBufferedInputs(float dt) {
 // tick — one authoritative server step
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::tick(float dt) {
-    m_gameTime += dt;
+    if (m_gameStarted) {
+        m_gameTime += dt;
+    }
     m_noise.update(m_world, dt);
     m_movement.update(m_world, m_map, dt);
     m_combat.update(m_world, dt);
@@ -210,10 +236,12 @@ void GameServer::tick(float dt) {
     m_extraction.update(m_world, dt, m_gameTime);
 
     // 좀비 리스폰 타이머 (10초마다 체크)
-    m_zombieSpawnTimer += dt;
-    if (m_zombieSpawnTimer >= 10.0f) {
-        m_zombieSpawnTimer = 0.0f;
-        spawnZombies(); // 내부에서 maxZombies 체크 후 부족하면 스폰
+    if (m_gameStarted) {
+        m_zombieSpawnTimer += dt;
+        if (m_zombieSpawnTimer >= 10.0f) {
+            m_zombieSpawnTimer = 0.0f;
+            spawnZombies(); // 내부에서 maxZombies 체크 후 부족하면 스폰
+        }
     }
 
     // 죽은 엔티티들의 시체 유지 시간(deathTimer) 처리
@@ -241,20 +269,22 @@ void GameServer::tick(float dt) {
     // 1주기: 낮 2분(120초), 밤 1분(60초) = 180초
     float timeOfDay = std::fmod(m_gameTime, 180.0f);
     bool isNight = timeOfDay > 120.0f;
-    
-    if (isNight && !m_wasNight) {
+
+    if (m_gameStarted && isNight && !m_wasNight) {
         m_wasNight = true;
         DZ_LOG_INFO("[Server] Night has fallen! Spawning zombie wave...");
         spawnNightWave();
-        // 밤이 되면 비명 소리 재생
-        m_noise.addEvent(0, 0, 9999.0f, 4, 1.0f); 
-    } else if (!isNight && m_wasNight) {
+    } else if (m_gameStarted && !isNight && m_wasNight) {
         m_wasNight = false;
         DZ_LOG_INFO("[Server] Day breaks! Outdoor zombies will start melting.");
     }
 
+    if (m_gameStarted && isNight) {
+        updateZombieDoorAttacks(dt);
+    }
+
     // 낮 시간(Daytime) 동안 야외에 있는 좀비에게 햇빛 데미지 지속 부여 (초당 20)
-    if (!isNight) {
+    if (m_gameStarted && !isNight) {
         for (EntityID id : m_world.alive()) {
             Entity e{id};
             if (m_world.tryGet<ZombieAIComponent>(e) && m_world.tryGet<HealthComponent>(e)->isAlive) {
@@ -301,8 +331,7 @@ void GameServer::tick(float dt) {
         pkt.header.type = PacketType::S2C_ExtractionUpdate;
         pkt.header.tick = m_tick;
         pkt.progress = prog;
-        const auto* es = m_extraction.stateOf(netID);
-        pkt.zoneID = es ? es->zoneID : 0xFF;
+        pkt.zoneID = m_extraction.channelZoneID(netID);
         m_net.sendUnreliable(pi, &pkt, sizeof(pkt));
     }
 }
@@ -578,7 +607,7 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
         medkit.key      = "medkit";
         medkit.category = ItemCategory::Consumable;
         medkit.quantity = 3;
-        medkit.weight   = 0.5f;
+        medkit.weight   = 1.0f;
         inv.addItem(medkit);
 
         Item bandage;
@@ -619,6 +648,10 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
     if (!m_gameStarted) {
         m_gameStarted = true;
         m_gameTimer = 0.0f;
+        m_gameTime = 0.0f;
+        m_zombieSpawnTimer = 0.0f;
+        m_wasNight = false;
+        DZ_LOG_INFO("[Server] Round timer started by first client match join.");
     }
     m_activePlayers++;
 
@@ -871,6 +904,158 @@ void GameServer::onBuildingDestroyed(uint32_t buildingNetID, bool explosion) {
     }
 }
 
+void GameServer::updateZombieDoorAttacks(float dt) {
+    constexpr float DOOR_ATTACK_RANGE = 30.0f;
+    constexpr float DOOR_ATTACK_RANGE2 = DOOR_ATTACK_RANGE * DOOR_ATTACK_RANGE;
+    constexpr float DOOR_TARGET_RANGE = TILE_SIZE * 7.0f;
+    constexpr float DOOR_TARGET_RANGE2 = DOOR_TARGET_RANGE * DOOR_TARGET_RANGE;
+    constexpr float PLAYER_DOOR_AGGRO_RANGE = TILE_SIZE * 14.0f;
+    constexpr float PLAYER_DOOR_AGGRO_RANGE2 = PLAYER_DOOR_AGGRO_RANGE * PLAYER_DOOR_AGGRO_RANGE;
+    const auto& buildings = m_map.getBuildings();
+
+    struct PlayerHouseTarget {
+        bool occupied = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        uint32_t netID = 0;
+    };
+    std::vector<PlayerHouseTarget> playerTargets(buildings.size());
+
+    for (EntityID id : m_world.alive()) {
+        Entity player{id};
+        auto* net = m_world.tryGet<NetworkComponent>(player);
+        if (!net || net->role != NetRole::LocallyOwned) continue;
+        auto* hp = m_world.tryGet<HealthComponent>(player);
+        auto* xf = m_world.tryGet<TransformComponent>(player);
+        if (!hp || !hp->isAlive || !xf) continue;
+
+        int tx = TileMap::worldToTile(xf->x);
+        int ty = TileMap::worldToTile(xf->y);
+        for (size_t bi = 0; bi < buildings.size(); ++bi) {
+            const auto& b = buildings[bi];
+            if (tx >= b.x && tx < b.x + b.w && ty >= b.y && ty < b.y + b.h) {
+                auto& target = playerTargets[bi];
+                if (!target.occupied) {
+                    target.occupied = true;
+                    target.x = xf->x;
+                    target.y = xf->y;
+                    target.netID = net->netID;
+                }
+                break;
+            }
+        }
+    }
+
+    bool anyPlayerInside = false;
+    for (const auto& target : playerTargets) {
+        if (target.occupied) { anyPlayerInside = true; break; }
+    }
+    if (!anyPlayerInside) return;
+
+    auto doorPlayerTarget = [&](const TileMap::DoorDef& door, PlayerHouseTarget& out) {
+        if (door.building >= playerTargets.size()) return false;
+        const auto& target = playerTargets[door.building];
+        if (!target.occupied) return false;
+        out = target;
+        return true;
+    };
+
+    for (EntityID id : m_world.alive()) {
+        Entity zombie{id};
+        auto* ai = m_world.tryGet<ZombieAIComponent>(zombie);
+        auto* hp = m_world.tryGet<HealthComponent>(zombie);
+        auto* xf = m_world.tryGet<TransformComponent>(zombie);
+        if (!ai || !hp || !hp->isAlive || !xf) continue;
+
+        int bestTargetDoor = -1;
+        float bestTargetD2 = DOOR_TARGET_RANGE2;
+        PlayerHouseTarget bestTargetPlayer{};
+        const auto& doors = m_map.getDoors();
+        for (const auto& door : doors) {
+            if (door.open || door.broken) continue;
+            PlayerHouseTarget target{};
+            if (!doorPlayerTarget(door, target)) continue;
+            const float pdx = target.x - xf->x;
+            const float pdy = target.y - xf->y;
+            if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
+            const float dx = TileMap::tileCentre(door.tx) - xf->x;
+            const float dy = TileMap::tileCentre(door.ty) - xf->y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 <= bestTargetD2) {
+                bestTargetD2 = d2;
+                bestTargetDoor = static_cast<int>(door.id);
+                bestTargetPlayer = target;
+            }
+        }
+        if (bestTargetDoor >= 0) {
+            const auto& door = doors[bestTargetDoor];
+            ai->targetX = TileMap::tileCentre(door.tx);
+            ai->targetY = TileMap::tileCentre(door.ty);
+            ai->targetNetID = bestTargetPlayer.netID;
+            ai->targetDoorID = static_cast<int16_t>(bestTargetDoor);
+            if (ai->state == ZombieState::Idle || ai->state == ZombieState::Alert) {
+                ai->state = ZombieState::Chase;
+                ai->stateTimer = 0.0f;
+            }
+        }
+
+        int bestDoor = -1;
+        float bestD2 = DOOR_ATTACK_RANGE2;
+        PlayerHouseTarget attackTargetPlayer{};
+        for (const auto& door : doors) {
+            if (door.open || door.broken) continue;
+            PlayerHouseTarget target{};
+            if (!doorPlayerTarget(door, target)) continue;
+            const float pdx = target.x - xf->x;
+            const float pdy = target.y - xf->y;
+            if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
+            const float dx = TileMap::tileCentre(door.tx) - xf->x;
+            const float dy = TileMap::tileCentre(door.ty) - xf->y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestDoor = static_cast<int>(door.id);
+                attackTargetPlayer = target;
+            }
+        }
+        if (bestDoor < 0) continue;
+
+        float damagePerSecond = 10.0f;
+        if (ai->type == ZombieType::Runner) damagePerSecond = 14.0f;
+        else if (ai->type == ZombieType::Brute) damagePerSecond = 24.0f;
+        if (ai->state == ZombieState::Frenzy) damagePerSecond *= 1.35f;
+
+        if (m_map.damageDoor(static_cast<uint16_t>(bestDoor), damagePerSecond * dt)) {
+            const auto& brokenDoor = m_map.getDoors()[bestDoor];
+            DZ_LOG_INFO("[Door] Zombie broke door %d at (%d,%d)",
+                        bestDoor, brokenDoor.tx, brokenDoor.ty);
+            broadcastDoorState(static_cast<uint16_t>(bestDoor), true);
+            m_noise.addEvent(TileMap::tileCentre(brokenDoor.tx),
+                             TileMap::tileCentre(brokenDoor.ty),
+                             480.0f, 3, 1.5f);
+
+            for (EntityID zid : m_world.alive()) {
+                Entity nearZombie{zid};
+                auto* zai = m_world.tryGet<ZombieAIComponent>(nearZombie);
+                auto* zhp = m_world.tryGet<HealthComponent>(nearZombie);
+                auto* zxf = m_world.tryGet<TransformComponent>(nearZombie);
+                if (!zai || !zhp || !zhp->isAlive || !zxf) continue;
+
+                const float pdx = attackTargetPlayer.x - zxf->x;
+                const float pdy = attackTargetPlayer.y - zxf->y;
+                if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
+
+                zai->targetX = attackTargetPlayer.x;
+                zai->targetY = attackTargetPlayer.y;
+                zai->targetNetID = attackTargetPlayer.netID;
+                zai->targetDoorID = -1;
+                zai->state = ZombieState::Chase;
+                zai->stateTimer = 0.0f;
+            }
+        }
+    }
+}
+
 void GameServer::onAllianceChanged(uint8_t teamA, uint8_t teamB, bool active) {
     AlliancePacket pkt{};
     pkt.packetType = static_cast<uint8_t>(
@@ -913,9 +1098,17 @@ bool GameServer::loadMap(const std::string& path) {
 }
 
 void GameServer::spawnZombies() {
+    float timeOfDay = std::fmod(m_gameTime, 180.0f);
+    bool isNight = timeOfDay > 120.0f;
+    const int targetZombies = isNight ? NIGHT_ZOMBIE_TARGET : DAY_ZOMBIE_TARGET;
+    const int livingZombies = countLivingZombies(m_world);
+    if (livingZombies >= targetZombies) return;
+
+    const int spawnBudget = std::min(MAX_ZOMBIE_SPAWN_BATCH, targetZombies - livingZombies);
     // 모든 위치는 건물 외부 개방 공간에 배치 (applyBuildingCollisions 충돌 없음)
     struct ZSpawn { float x, y; ZombieType type; float hp; };
     std::vector<ZSpawn> spawns;
+    spawns.reserve(spawnBudget);
     
     // 파밍 지역(건물 내부) 위주로 스폰 (안전 지역 확보)
     const auto& bds = m_map.getBuildings();
@@ -951,17 +1144,28 @@ void GameServer::spawnZombies() {
             }
             return doorCount >= 4;
         };
+        auto buildingHasBrokenDoor = [&](int buildingIdx) {
+            for (const auto& door : m_map.getDoors()) {
+                if (door.building == buildingIdx && door.broken) return true;
+            }
+            return false;
+        };
 
         for (int i = 0; i < static_cast<int>(bds.size()); ++i) {
-            if (playerInsideBuilding(bds[i]) && allDoorsClosed(i)) continue;
+            if (playerInsideBuilding(bds[i]) &&
+                (allDoorsClosed(i) || buildingHasBrokenDoor(i))) continue;
             eligibleBuildings.push_back(i);
         }
         if (eligibleBuildings.empty()) return;
 
-        for (int i = 0; i < 15; ++i) { // 낮 좀비는 15마리만 실내 스폰 (개체수 대폭 축소)
+        for (int i = 0; i < spawnBudget; ++i) {
             const auto& bd = bds[eligibleBuildings[std::rand() % eligibleBuildings.size()]];
-            float bx = (bd.x + 1 + (std::rand() % std::max(1, bd.w - 2))) * TILE_SIZE;
-            float by = (bd.y + 1 + (std::rand() % std::max(1, bd.h - 2))) * TILE_SIZE;
+            int insetX = (bd.w > 6) ? 2 : 1;
+            int insetY = (bd.h > 6) ? 2 : 1;
+            int usableW = std::max(1, bd.w - insetX * 2);
+            int usableH = std::max(1, bd.h - insetY * 2);
+            float bx = TileMap::tileCentre(bd.x + insetX + (std::rand() % usableW));
+            float by = TileMap::tileCentre(bd.y + insetY + (std::rand() % usableH));
             ZombieType type = (std::rand() % 10 < 2) ? ZombieType::Runner : ZombieType::Shambler;
             spawns.push_back({bx, by, type, type == ZombieType::Runner ? 40.f : 60.f});
         }
@@ -1049,6 +1253,11 @@ void GameServer::onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam) {
 // onBuildPlace — 건설 배치 처리
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t btype, uint8_t dir) {
+    if (static_cast<BuildingType>(btype) == BuildingType::Door) {
+        onDoorRepairReq(peerIdx, tileX, tileY);
+        return;
+    }
+
     bool ok = m_logic && m_logic->handleBuildRequest(peerIdx, tileX, tileY,
                                                       static_cast<BuildingType>(btype), dir);
     BuildAckPacket ack{};
@@ -1061,6 +1270,61 @@ void GameServer::onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, ui
         std::strncpy(ack.message, "재료 부족 또는 설치 불가 위치입니다.", sizeof(ack.message) - 1);
     }
     m_net.sendReliable(peerIdx, &ack, sizeof(ack));
+}
+
+void GameServer::onDoorRepairReq(uint32_t peerIdx, int16_t tileX, int16_t tileY) {
+    const int doorID = m_map.findDoorAt(tileX, tileY);
+    if (doorID < 0) return;
+    const auto& doors = m_map.getDoors();
+    if (static_cast<size_t>(doorID) >= doors.size() || !doors[doorID].broken) return;
+
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        if (!net || net->role != NetRole::LocallyOwned || net->ownerID != peerIdx) continue;
+        auto* xf = m_world.tryGet<TransformComponent>(e);
+        auto* hp = m_world.tryGet<HealthComponent>(e);
+        auto* inv = m_world.tryGet<InventoryComponent>(e);
+        if (!xf || !hp || !hp->isAlive || !inv) return;
+
+        const float dx = TileMap::tileCentre(tileX) - xf->x;
+        const float dy = TileMap::tileCentre(tileY) - xf->y;
+        constexpr float REPAIR_RANGE = TILE_SIZE * 3.0f;
+        if (dx * dx + dy * dy > REPAIR_RANGE * REPAIR_RANGE) return;
+
+        auto countItem = [&](const char* key) {
+            int total = 0;
+            for (const auto& slot : inv->slots) {
+                if (slot.isValid() && slot.key == key) total += slot.quantity;
+            }
+            return total;
+        };
+        auto consumeItem = [&](const char* key, int qty) {
+            for (int i = 0; i < INVENTORY_GRID_SLOTS && qty > 0; ++i) {
+                if (!inv->slots[i].isValid() || inv->slots[i].key != key) continue;
+                int take = std::min(inv->slots[i].quantity, qty);
+                inv->slots[i].quantity -= take;
+                qty -= take;
+                if (inv->slots[i].quantity <= 0) {
+                    inv->removeItem(i);
+                    --i;
+                }
+            }
+        };
+
+        if (countItem("plank") < 3 || countItem("scrap_metal") < 1) return;
+        consumeItem("plank", 3);
+        consumeItem("scrap_metal", 1);
+        inv->recalculateGridStats();
+
+        if (m_map.repairDoor(static_cast<uint16_t>(doorID))) {
+            broadcastDoorState(static_cast<uint16_t>(doorID), false);
+            sendInventorySyncToPeer(peerIdx);
+            DZ_LOG_INFO("[Door] Player %u rebuilt door %d at (%d,%d)",
+                        peerIdx, doorID, tileX, tileY);
+        }
+        return;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1102,6 +1366,7 @@ void GameServer::onDoorToggleReq(uint32_t peerIdx, uint16_t doorID) {
         if (!xf || !hp || !hp->isAlive) return;
 
         const auto& door = doors[doorID];
+        if (door.broken) return;
         const float dx = TileMap::tileCentre(door.tx) - xf->x;
         const float dy = TileMap::tileCentre(door.ty) - xf->y;
         constexpr float INTERACT_RANGE = TILE_SIZE * 2.0f;
@@ -1121,6 +1386,8 @@ void GameServer::sendDoorState(uint32_t peerIdx, uint16_t doorID, bool open) {
     DoorStatePacket pkt{};
     pkt.doorID = doorID;
     pkt.open = open ? 1 : 0;
+    const auto& doors = m_map.getDoors();
+    if (doorID < doors.size()) pkt.broken = doors[doorID].broken ? 1 : 0;
     m_net.sendReliable(peerIdx, &pkt, sizeof(pkt));
 }
 
@@ -1128,6 +1395,8 @@ void GameServer::broadcastDoorState(uint16_t doorID, bool open) {
     DoorStatePacket pkt{};
     pkt.doorID = doorID;
     pkt.open = open ? 1 : 0;
+    const auto& doors = m_map.getDoors();
+    if (doorID < doors.size()) pkt.broken = doors[doorID].broken ? 1 : 0;
     m_net.broadcastReliable(&pkt, sizeof(pkt));
 }
 
@@ -1229,14 +1498,21 @@ void GameServer::broadcastTeamStatus() {
         if (m_alliance.isAllied(pairA[k], pairB[k]))
             allianceBits |= (1 << k);
 
-    m_net.broadcastTeamStatus(m_world, allianceBits, static_cast<uint16_t>(std::fmod(m_gameTime, 180.0f)));
+    m_net.broadcastTeamStatus(m_world, allianceBits, static_cast<uint16_t>(m_gameTime));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // spawnNightWave — 밤 시작 시 플레이어들 주변에 웨이브 생성
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::spawnNightWave() {
-    int waveSize = 8 + m_activePlayers * 3; // 성능: 1인=11마리, 2인=14마리로 제한
+    const int livingZombies = countLivingZombies(m_world);
+    const int remainingSlots = std::max(0, NIGHT_ZOMBIE_TARGET - livingZombies);
+    int waveSize = std::min(remainingSlots, NIGHT_WAVE_BASE + m_activePlayers * NIGHT_WAVE_PER_PLAYER);
+    if (waveSize <= 0) {
+        DZ_LOG_INFO("[Server] Night wave skipped: zombie cap reached (%d/%d).",
+                    livingZombies, NIGHT_ZOMBIE_TARGET);
+        return;
+    }
     int spawned = 0;
     
     // 현재 살아있는 플레이어 수집
@@ -1299,6 +1575,172 @@ void GameServer::onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID) {
     if (m_logic) {
         m_logic->handleLootPickup(peerIdx, lootNetID);
         sendInventorySyncToPeer(peerIdx);
+    }
+}
+
+void GameServer::onItemDropReq(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint16_t quantity) {
+    if (quantity == 0) return;
+
+    for (EntityID id : m_world.alive()) {
+        Entity player{id};
+        auto* net = m_world.tryGet<NetworkComponent>(player);
+        if (!net || net->role != NetRole::LocallyOwned || net->ownerID != peerIdx) continue;
+
+        auto* xf = m_world.tryGet<TransformComponent>(player);
+        auto* hp = m_world.tryGet<HealthComponent>(player);
+        auto* inv = m_world.tryGet<InventoryComponent>(player);
+        if (!xf || !hp || !hp->isAlive || !inv) return;
+
+        Item* src = nullptr;
+        if (srcType == 0 && srcIdx < INVENTORY_GRID_SLOTS) {
+            src = &inv->slots[srcIdx];
+        } else if (srcType == 1) {
+            src = &inv->equipped[static_cast<int>(EquipSlot::PrimaryWeapon)];
+        } else if (srcType == 2) {
+            src = &inv->equipped[static_cast<int>(EquipSlot::SecondaryWeapon)];
+        }
+        if (!src || !src->isValid() || src->quantity <= 0) return;
+
+        const int dropQty = std::min<int>(quantity, src->quantity);
+        if (dropQty <= 0) return;
+
+        Item dropped = *src;
+        dropped.quantity = dropQty;
+
+        src->quantity -= dropQty;
+        if (src->quantity <= 0) *src = {};
+        inv->recalculateGridStats();
+
+        Entity loot = m_world.createEntity();
+        auto& lxf = m_world.addComponent<TransformComponent>(loot);
+        const float angle = (static_cast<float>(std::rand() % 360)) * 3.14159265f / 180.0f;
+        const float dist = 28.0f + static_cast<float>(std::rand() % 18);
+        lxf.x = xf->x + std::cos(angle) * dist;
+        lxf.y = xf->y + std::sin(angle) * dist;
+        m_map.resolveAABB(lxf.x, lxf.y, 10.0f, 10.0f);
+
+        auto& linv = m_world.addComponent<InventoryComponent>(loot);
+        linv.addItem(dropped);
+
+        auto& lnet = m_world.addComponent<NetworkComponent>(loot);
+        lnet.netID = m_nextPlayerNetID++;
+        lnet.role = NetRole::ServerAuth;
+        lnet.markDirty(DIRTY_TRANSFORM);
+        lnet.markDirty(DIRTY_INVENTORY);
+
+        net->markDirty(DIRTY_INVENTORY);
+        sendInventorySyncToPeer(peerIdx);
+        DZ_LOG_INFO("[Inventory] Player %u dropped %s x%d", peerIdx, dropped.key.c_str(), dropQty);
+        return;
+    }
+}
+
+void GameServer::onDismantleReq(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx) {
+    struct ResultDef { const char* key; int qty; };
+    struct DismantleDef {
+        const char* source;
+        bool requiresWorkbench;
+        ResultDef results[3];
+        int resultCount;
+    };
+    static const DismantleDef RECIPES[] = {
+        {"scrap_pipe",   false, {{"scrap_metal", 1}, {"", 0}, {"", 0}}, 1},
+        {"nail_bat",     false, {{"plank", 1}, {"scrap_metal", 1}, {"", 0}}, 2},
+        {"fire_axe",     false, {{"scrap_metal", 2}, {"", 0}, {"", 0}}, 1},
+        {"pistol_9mm",   false, {{"scrap_metal", 2}, {"electronic_part", 1}, {"", 0}}, 2},
+        {"smg_9mm",      false, {{"scrap_metal", 3}, {"electronic_part", 1}, {"", 0}}, 2},
+        {"flamethrower", false, {{"scrap_metal", 3}, {"oil", 2}, {"electronic_part", 1}}, 3},
+        {"molotov",      false, {{"oil", 1}, {"", 0}, {"", 0}}, 1},
+    };
+
+    auto makeItem = [](const char* key, int qty) {
+        Item item;
+        item.key = key;
+        item.itemID = itemIDForKey(key);
+        item.quantity = qty;
+        if (std::strcmp(key, "scrap_metal") == 0) {
+            item.category = ItemCategory::BuildMaterial; item.weight = 1.0f;
+        } else if (std::strcmp(key, "plank") == 0) {
+            item.category = ItemCategory::BuildMaterial; item.weight = 0.8f;
+        } else if (std::strcmp(key, "electronic_part") == 0) {
+            item.category = ItemCategory::BuildMaterial; item.weight = 0.5f;
+        } else if (std::strcmp(key, "oil") == 0) {
+            item.category = ItemCategory::BuildMaterial; item.weight = 1.2f;
+        } else {
+            item.category = ItemCategory::Misc; item.weight = 1.0f;
+        }
+        return item;
+    };
+
+    for (EntityID id : m_world.alive()) {
+        Entity player{id};
+        auto* net = m_world.tryGet<NetworkComponent>(player);
+        if (!net || net->role != NetRole::LocallyOwned || net->ownerID != peerIdx) continue;
+
+        auto* xf = m_world.tryGet<TransformComponent>(player);
+        auto* hp = m_world.tryGet<HealthComponent>(player);
+        auto* inv = m_world.tryGet<InventoryComponent>(player);
+        if (!xf || !hp || !hp->isAlive || !inv) return;
+
+        Item* src = nullptr;
+        if (srcType == 0 && srcIdx < INVENTORY_GRID_SLOTS) {
+            src = &inv->slots[srcIdx];
+        } else if (srcType == 1) {
+            src = &inv->equipped[static_cast<int>(EquipSlot::PrimaryWeapon)];
+        } else if (srcType == 2) {
+            src = &inv->equipped[static_cast<int>(EquipSlot::SecondaryWeapon)];
+        }
+        if (!src || !src->isValid()) return;
+
+        const DismantleDef* recipe = nullptr;
+        for (const auto& r : RECIPES) {
+            if (src->key == r.source) { recipe = &r; break; }
+        }
+        if (!recipe) return;
+
+        if (recipe->requiresWorkbench) {
+            bool nearWorkbench = false;
+            auto& bldPool = m_world.pool<BuildingComponent>();
+            auto& xfPool = m_world.pool<TransformComponent>();
+            for (size_t i = 0; i < bldPool.owners().size(); ++i) {
+                auto& bld = bldPool.data()[i];
+                if (bld.isDestroyed || !bld.isWorkbench()) continue;
+                auto* wbxf = xfPool.get(bldPool.owners()[i]);
+                if (!wbxf) continue;
+                const float dx = wbxf->x - xf->x;
+                const float dy = wbxf->y - xf->y;
+                if (dx * dx + dy * dy <= 96.0f * 96.0f) {
+                    nearWorkbench = true;
+                    break;
+                }
+            }
+            if (!nearWorkbench) return;
+        }
+
+        InventoryComponent next = *inv;
+        Item* nextSrc = nullptr;
+        if (srcType == 0 && srcIdx < INVENTORY_GRID_SLOTS) {
+            nextSrc = &next.slots[srcIdx];
+        } else if (srcType == 1) {
+            nextSrc = &next.equipped[static_cast<int>(EquipSlot::PrimaryWeapon)];
+        } else if (srcType == 2) {
+            nextSrc = &next.equipped[static_cast<int>(EquipSlot::SecondaryWeapon)];
+        }
+        if (!nextSrc || !nextSrc->isValid()) return;
+        --nextSrc->quantity;
+        if (nextSrc->quantity <= 0) *nextSrc = {};
+        next.recalculateGridStats();
+
+        for (int i = 0; i < recipe->resultCount; ++i) {
+            Item result = makeItem(recipe->results[i].key, recipe->results[i].qty);
+            if (!next.addItem(result)) return;
+        }
+
+        *inv = next;
+        net->markDirty(DIRTY_INVENTORY);
+        sendInventorySyncToPeer(peerIdx);
+        DZ_LOG_INFO("[Inventory] Player %u dismantled %s", peerIdx, recipe->source);
+        return;
     }
 }
 
@@ -1368,57 +1810,101 @@ void GameServer::sendStashSyncToPeer(uint32_t peerIdx) {
 // spawnLootBoxes
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::spawnLootBoxes() {
-    int totalBoxes = 120;
+    constexpr int TOTAL_BOXES = 95;
+    constexpr int INSIDE_BOXES = 55;
+    constexpr int OUTSIDE_BOXES = TOTAL_BOXES - INSIDE_BOXES;
+    constexpr float MIN_LOOT_SPACING = 96.0f;
     int spawned = 0;
+    std::vector<std::pair<float, float>> placed;
     
-    struct LootItemDef { const char* key; ItemCategory cat; float weight; };
+    struct LootItemDef {
+        const char* key;
+        ItemCategory cat;
+        float weight;
+        int quantity;
+        float baseWeight;
+        uint8_t tag; // 0=medical, 1=food, 2=material, 3=ammo, 4=common weapon, 5=rare weapon
+    };
     auto getDrop = [&](int theme) -> std::pair<LootItemDef, int> {
-        int roll = std::rand() % 100;
-        if (theme == 0) { // Residential
-            if (roll < 25) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
-            if (roll < 45) return {{"food_can", ItemCategory::Consumable, 0.5f}, 2};
-            if (roll < 70) return {{"plank", ItemCategory::BuildMaterial, 0.8f}, 3};
-            if (roll < 85) return {{"scrap_metal", ItemCategory::BuildMaterial, 1.0f}, 2};
-            if (roll < 95) return {{"scrap_pipe", ItemCategory::Weapon, 2.0f}, 20}; // 20 = 내구도
-            return {{"medkit", ItemCategory::Consumable, 1.0f}, 1};
-        } else if (theme == 1 || theme == 2) { // Commercial / Industrial
-            if (roll < 15) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
-            if (roll < 35) return {{"scrap_metal", ItemCategory::BuildMaterial, 1.0f}, 3};
-            if (roll < 50) return {{"plank", ItemCategory::BuildMaterial, 0.8f}, 3};
-            if (roll < 65) return {{"oil", ItemCategory::BuildMaterial, 1.2f}, 2};
-            if (roll < 78) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, PISTOL_MAG_CAPACITY};
-            if (roll < 92) return {{"ammo_9mm", ItemCategory::Ammo, 0.3f}, 30};
-            return {{"fire_axe", ItemCategory::Weapon, 3.0f}, 12}; // 12 = 내구도
-        } else { // Military
-            if (roll < 15) return {{"medkit", ItemCategory::Consumable, 1.0f}, 2};
-            if (roll < 35) return {{"electronic_part", ItemCategory::BuildMaterial, 0.5f}, 2};
-            if (roll < 50) return {{"oil", ItemCategory::BuildMaterial, 1.2f}, 3};
-            if (roll < 68) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, PISTOL_MAG_CAPACITY};
-            if (roll < 90) return {{"ammo_9mm", ItemCategory::Ammo, 0.3f}, 45};
-            return {{"flamethrower", ItemCategory::Weapon, 5.0f}, 1};
+        static constexpr LootItemDef pool[] = {
+            {"bandage",         ItemCategory::Consumable,    0.3f, 3, 18.0f, 0},
+            {"medkit",          ItemCategory::Consumable,    1.0f, 1,  8.0f, 0},
+            {"food_can",        ItemCategory::Consumable,    0.5f, 2, 12.0f, 1},
+            {"plank",           ItemCategory::BuildMaterial, 0.8f, 3, 14.0f, 2},
+            {"scrap_metal",     ItemCategory::BuildMaterial, 1.0f, 3, 14.0f, 2},
+            {"electronic_part", ItemCategory::BuildMaterial, 0.5f, 2,  7.0f, 2},
+            {"oil",             ItemCategory::BuildMaterial, 1.2f, 2,  9.0f, 2},
+            {"ammo_9mm",        ItemCategory::Ammo,          0.3f, 30, 11.0f, 3},
+            {"scrap_pipe",      ItemCategory::Weapon,        2.0f, 1,  7.0f, 4},
+            {"fire_axe",        ItemCategory::Weapon,        3.0f, 1,  5.0f, 4},
+            {"pistol_9mm",      ItemCategory::Weapon,        1.0f, PISTOL_MAG_CAPACITY, 5.0f, 4},
+            {"smg_9mm",         ItemCategory::Weapon,        2.4f, 30, 3.0f, 5},
+            {"flamethrower",    ItemCategory::Weapon,        5.0f, 1,  1.5f, 5},
+        };
+        auto tagMultiplier = [&](uint8_t tag) {
+            switch (theme) {
+                case 0: // Residential: supplies are common, weapons still possible.
+                    if (tag == 0) return 1.7f;
+                    if (tag == 1) return 1.8f;
+                    if (tag == 2) return 1.1f;
+                    if (tag == 5) return 0.35f;
+                    return 0.75f;
+                case 1: // Commercial: mixed shelves, more ammo and portable weapons.
+                    if (tag == 0) return 1.15f;
+                    if (tag == 1) return 1.25f;
+                    if (tag == 3) return 1.35f;
+                    if (tag == 4) return 1.25f;
+                    return 0.9f;
+                case 2: // Industrial: construction and fuel materials.
+                    if (tag == 2) return 1.9f;
+                    if (tag == 4) return 1.15f;
+                    if (tag == 0) return 0.8f;
+                    return 0.75f;
+                case 3: // Military: ammo and high-end weapons.
+                    if (tag == 3) return 1.8f;
+                    if (tag == 5) return 2.2f;
+                    if (tag == 4) return 1.25f;
+                    if (tag == 1) return 0.45f;
+                    return 0.85f;
+                default:
+                    return 1.0f;
+            }
+        };
+
+        float total = 0.0f;
+        for (const auto& item : pool) total += item.baseWeight * tagMultiplier(item.tag);
+        float roll = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX)) * total;
+        for (const auto& item : pool) {
+            roll -= item.baseWeight * tagMultiplier(item.tag);
+            if (roll <= 0.0f) return {item, item.quantity};
         }
+        return {pool[0], pool[0].quantity};
     };
 
     const auto& buildings = m_map.getBuildings();
     if (buildings.empty()) return;
 
-    for (int i = 0; i < totalBoxes; ++i) {
-        // 랜덤 건물 선택
-        const auto& b = buildings[std::rand() % buildings.size()];
-        
-        // 건물 내 랜덤 위치
-        int b_w = std::max(1, b.w - 2);
-        int b_h = std::max(1, b.h - 2);
-        int tx = b.x + 1 + std::rand() % b_w;
-        int ty = b.y + 1 + std::rand() % b_h;
+    auto farEnough = [&](float wx, float wy) {
+        for (auto& p : placed) {
+            float dx = p.first - wx;
+            float dy = p.second - wy;
+            if (dx * dx + dy * dy < MIN_LOOT_SPACING * MIN_LOOT_SPACING) return false;
+        }
+        return true;
+    };
+
+    auto createLoot = [&](int tx, int ty, int theme) {
+        float wx = TileMap::tileCentre(tx);
+        float wy = TileMap::tileCentre(ty);
+        if (!m_map.inBounds(tx, ty) || m_map.isSolid(tx, ty) || !farEnough(wx, wy)) return false;
 
         Entity e = m_world.createEntity();
         auto& xf = m_world.addComponent<TransformComponent>(e);
-        xf.x = tx * TILE_SIZE + TILE_SIZE / 2.0f;
-        xf.y = ty * TILE_SIZE + TILE_SIZE / 2.0f;
+        xf.x = wx;
+        xf.y = wy;
 
         auto& inv = m_world.addComponent<InventoryComponent>(e);
-        auto drop = getDrop(b.theme);
+        auto drop = getDrop(theme);
         Item item;
         item.key = drop.first.key;
         item.itemID = itemIDForKey(drop.first.key);
@@ -1431,9 +1917,34 @@ void GameServer::spawnLootBoxes() {
         net.netID  = m_nextPlayerNetID++;
         net.role   = NetRole::ServerAuth;
         net.markDirty(DIRTY_TRANSFORM);
+        placed.push_back({wx, wy});
         spawned++;
+        return true;
+    };
+
+    int insideSpawned = 0;
+    for (int attempts = 0; insideSpawned < INSIDE_BOXES && attempts < INSIDE_BOXES * 20; ++attempts) {
+        const auto& b = buildings[std::rand() % buildings.size()];
+        int b_w = std::max(1, b.w - 2);
+        int b_h = std::max(1, b.h - 2);
+        int tx = b.x + 1 + std::rand() % b_w;
+        int ty = b.y + 1 + std::rand() % b_h;
+        if (createLoot(tx, ty, b.theme)) ++insideSpawned;
     }
-    DZ_LOG_INFO("[Server] Spawned %d static loot boxes", spawned);
+
+    int outsideSpawned = 0;
+    for (int attempts = 0; outsideSpawned < OUTSIDE_BOXES && attempts < OUTSIDE_BOXES * 40; ++attempts) {
+        int tx = 2 + std::rand() % std::max(1, m_map.width() - 4);
+        int ty = 2 + std::rand() % std::max(1, m_map.height() - 4);
+        if (!m_map.inBounds(tx, ty) || m_map.isSolid(tx, ty)) continue;
+        TileType type = m_map.at(tx, ty).type;
+        if (type == TILE_WOOD_FLOOR || type == TILE_WALL) continue;
+        int theme = std::rand() % 4;
+        if (createLoot(tx, ty, theme)) ++outsideSpawned;
+    }
+
+    DZ_LOG_INFO("[Server] Spawned %d static loot boxes (%d inside, %d outside)",
+                spawned, insideSpawned, outsideSpawned);
 }
 
 } // namespace dz

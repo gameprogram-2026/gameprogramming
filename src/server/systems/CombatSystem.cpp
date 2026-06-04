@@ -135,9 +135,10 @@ void CombatSystem::tickReloading(World& world, float dt) {
             if (!inv) continue;
             
             Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
-            if (!w.isValid() || w.key != "pistol_9mm") continue;
-            
-            int magCapacity = cbt.magCapacity > 0 ? cbt.magCapacity : PISTOL_MAG_CAPACITY;
+            if (!w.isValid() || (w.key != "pistol_9mm" && w.key != "smg_9mm")) continue;
+
+            int magCapacity = (w.key == "smg_9mm") ? 30 : PISTOL_MAG_CAPACITY;
+            cbt.magCapacity = magCapacity;
             int needed = magCapacity - w.quantity;
             if (needed <= 0) continue;
             

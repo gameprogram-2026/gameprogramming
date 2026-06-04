@@ -45,16 +45,44 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
     float timeOfDay = std::fmod(gameTime, 180.0f);
     bool isNight = timeOfDay > 120.0f;
 
+    bool doorTargetActive = false;
+    if (m_map && ai.targetDoorID >= 0) {
+        const auto& doors = m_map->getDoors();
+        const uint16_t doorID = static_cast<uint16_t>(ai.targetDoorID);
+        if (doorID < doors.size() && !doors[doorID].open && !doors[doorID].broken) {
+            ai.targetX = TileMap::tileCentre(doors[doorID].tx);
+            ai.targetY = TileMap::tileCentre(doors[doorID].ty);
+            doorTargetActive = true;
+        } else {
+            ai.targetDoorID = -1;
+        }
+    }
+
     // 낮/밤에 따른 청각 반경 조절 (밤에는 엄청 예민해짐)
     float hearingMult = isNight ? 2.5f : 0.3f;
 
-    // Sample loudest noise within hearing range
-    uint8_t maxNoise = noise.maxCategoryNear(xf->x, xf->y, ZOMBIE_HEARING_RADIUS * hearingMult);
+    // Sample loudest noise within hearing range and keep its position. State changes
+    // from noise must have a real destination; otherwise zombies can chase (0,0).
+    const float hearingRadius = ZOMBIE_HEARING_RADIUS * hearingMult;
+    uint8_t maxNoise = 0;
+    float noiseTargetX = xf->x;
+    float noiseTargetY = xf->y;
+    for (const auto& ev : noise.events()) {
+        const float dx = ev.x - xf->x;
+        const float dy = ev.y - xf->y;
+        const float dist = std::sqrt(dx * dx + dy * dy);
+        if (dist > ev.radius + hearingRadius) continue;
+        if (ev.category > maxNoise) {
+            maxNoise = ev.category;
+            noiseTargetX = ev.x;
+            noiseTargetY = ev.y;
+        }
+    }
 
     ai.stateTimer += dt;
 
     // ── 시야 범위 내 플레이어 직접 감지 (소음 무관) ──────────────────────────
-    {
+    if (!doorTargetActive) {
         Entity nearest = findNearestEnemy(world, zombie);
         if (nearest.isValid()) {
             auto* nxf = world.tryGet<TransformComponent>(nearest);
@@ -106,14 +134,20 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         ai.alertLevel -= ZOMBIE_ALERT_DECAY * dt;
         if (ai.alertLevel < 0.0f) ai.alertLevel = 0.0f;
 
-        if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+        if (!doorTargetActive && maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+            ai.targetX = noiseTargetX;
+            ai.targetY = noiseTargetY;
             ai.state = ZombieState::Frenzy;
             ai.stateTimer = 0.0f;
             ai.chainTriggered = false;
-        } else if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Loud)) {
+        } else if (!doorTargetActive && maxNoise >= static_cast<uint8_t>(NoiseCategory::Loud)) {
+            ai.targetX = noiseTargetX;
+            ai.targetY = noiseTargetY;
             ai.state = ZombieState::Chase;
             ai.stateTimer = 0.0f;
-        } else if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Soft)) {
+        } else if (!doorTargetActive && maxNoise >= static_cast<uint8_t>(NoiseCategory::Soft)) {
+            ai.targetX = noiseTargetX;
+            ai.targetY = noiseTargetY;
             if (ai.type == ZombieType::Runner) {
                 ai.state = ZombieState::Chase;
                 ai.stateTimer = 0.0f;
@@ -132,11 +166,15 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
     case ZombieState::Alert:
         ai.alertLevel -= ZOMBIE_ALERT_DECAY * dt * 0.5f; // decay slower in Alert
 
-        if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+        if (!doorTargetActive && maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+            ai.targetX = noiseTargetX;
+            ai.targetY = noiseTargetY;
             ai.state = ZombieState::Frenzy;
             ai.stateTimer = 0.0f;
             ai.chainTriggered = false;
-        } else if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Loud)) {
+        } else if (!doorTargetActive && maxNoise >= static_cast<uint8_t>(NoiseCategory::Loud)) {
+            ai.targetX = noiseTargetX;
+            ai.targetY = noiseTargetY;
             ai.state = ZombieState::Chase;
             ai.stateTimer = 0.0f;
         } else if (ai.alertLevel <= 0.0f) {
@@ -148,23 +186,29 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
 
     // ── Chase ─────────────────────────────────────────────────────────────────
     case ZombieState::Chase: {
-        // 매 틱 가장 가까운 적 재탐색 (타깃 사망 처리)
-        Entity target = findNearestEnemy(world, zombie);
-        if (target.isValid()) {
-            auto* txf  = world.tryGet<TransformComponent>(target);
-            auto* tnet = world.tryGet<NetworkComponent>(target);
-            if (txf) { ai.targetX = txf->x; ai.targetY = txf->y; }
-            if (tnet) ai.targetNetID = tnet->netID;
+        if (doorTargetActive) {
             ai.stateTimer = 0.0f;
         } else {
-            if (ai.stateTimer >= ZOMBIE_SILENCE_CHASE) {
-                ai.state      = ZombieState::Idle;
+            // 매 틱 가장 가까운 적 재탐색 (타깃 사망 처리)
+            Entity target = findNearestEnemy(world, zombie);
+            if (target.isValid()) {
+                auto* txf  = world.tryGet<TransformComponent>(target);
+                auto* tnet = world.tryGet<NetworkComponent>(target);
+                if (txf) { ai.targetX = txf->x; ai.targetY = txf->y; }
+                if (tnet) ai.targetNetID = tnet->netID;
                 ai.stateTimer = 0.0f;
-                ai.alertLevel = 0.0f;
+            } else {
+                if (ai.stateTimer >= ZOMBIE_SILENCE_CHASE) {
+                    ai.state      = ZombieState::Idle;
+                    ai.stateTimer = 0.0f;
+                    ai.alertLevel = 0.0f;
+                }
             }
         }
 
-        if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+        if (!doorTargetActive && maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+            ai.targetX = noiseTargetX;
+            ai.targetY = noiseTargetY;
             ai.state = ZombieState::Frenzy;
             ai.stateTimer = 0.0f;
             ai.chainTriggered = false;
@@ -242,7 +286,11 @@ void ZombieAISystem::doMovement(World& world, Entity zombie,
     case ZombieState::Idle:
         speed = ZOMBIE_SPEED_IDLE;
         ai.patrolTimer -= dt;
-        if (ai.patrolTimer <= 0.0f) pickPatrolWaypoint(ai, *xf);
+        if (ai.patrolTimer <= 0.0f) {
+            pickPatrolWaypoint(ai, *xf);
+            destX = ai.patrolWpX;
+            destY = ai.patrolWpY;
+        }
         break;
     case ZombieState::Alert:
         speed  = ZOMBIE_SPEED_ALERT;
@@ -276,6 +324,47 @@ void ZombieAISystem::doMovement(World& world, Entity zombie,
     } else {
         xf->x += nx * speed * dt;
         xf->y += ny * speed * dt;
+    }
+
+    // 좀비끼리 같은 코너/목표점에 겹쳐 쌓이지 않도록 약한 분리 이동.
+    float pushX = 0.0f;
+    float pushY = 0.0f;
+    int pushCount = 0;
+    constexpr float SEPARATION_RADIUS = 22.0f;
+    constexpr float SEPARATION_R2 = SEPARATION_RADIUS * SEPARATION_RADIUS;
+    for (EntityID id : world.alive()) {
+        if (id == zombie.id) continue;
+        Entity other{id};
+        if (!world.tryGet<ZombieAIComponent>(other)) continue;
+        auto* ohp = world.tryGet<HealthComponent>(other);
+        auto* oxf = world.tryGet<TransformComponent>(other);
+        if (!ohp || !ohp->isAlive || !oxf) continue;
+        float odx = xf->x - oxf->x;
+        float ody = xf->y - oxf->y;
+        float d2 = odx * odx + ody * ody;
+        if (d2 <= 0.01f || d2 > SEPARATION_R2) continue;
+        float invD = 1.0f / std::sqrt(d2);
+        float strength = 1.0f - (std::sqrt(d2) / SEPARATION_RADIUS);
+        pushX += odx * invD * strength;
+        pushY += ody * invD * strength;
+        ++pushCount;
+    }
+    if (pushCount > 0) {
+        float pushLen = std::sqrt(pushX * pushX + pushY * pushY);
+        if (pushLen > 0.01f) {
+            constexpr float SEPARATION_SPEED = 56.0f;
+            pushX = (pushX / pushLen) * SEPARATION_SPEED * dt;
+            pushY = (pushY / pushLen) * SEPARATION_SPEED * dt;
+            if (m_map) {
+                xf->x += pushX;
+                m_map->resolveAxisX(xf->x, xf->y, 10.0f, 10.0f);
+                xf->y += pushY;
+                m_map->resolveAxisY(xf->x, xf->y, 10.0f, 10.0f);
+            } else {
+                xf->x += pushX;
+                xf->y += pushY;
+            }
+        }
     }
 
     xf->rotation = std::atan2(nx, -ny) * (180.0f / 3.14159265f);
@@ -387,10 +476,41 @@ void ZombieAISystem::doAttack(World& world, Entity zombie,
 // ─────────────────────────────────────────────────────────────────────────────
 void ZombieAISystem::pickPatrolWaypoint(ZombieAIComponent& ai,
                                          const TransformComponent& xf) noexcept {
+    if (m_map) {
+        const int ztx = TileMap::worldToTile(xf.x);
+        const int zty = TileMap::worldToTile(xf.y);
+        for (const auto& b : m_map->getBuildings()) {
+            if (ztx < b.x || ztx >= b.x + b.w || zty < b.y || zty >= b.y + b.h) continue;
+
+            const int insetX = (b.w > 6) ? 2 : 1;
+            const int insetY = (b.h > 6) ? 2 : 1;
+            const int usableW = std::max(1, b.w - insetX * 2);
+            const int usableH = std::max(1, b.h - insetY * 2);
+            for (int attempt = 0; attempt < 8; ++attempt) {
+                int tx = b.x + insetX + (std::rand() % usableW);
+                int ty = b.y + insetY + (std::rand() % usableH);
+                if (m_map->isSolid(tx, ty)) continue;
+                ai.patrolWpX = TileMap::tileCentre(tx);
+                ai.patrolWpY = TileMap::tileCentre(ty);
+                ai.patrolTimer = ZOMBIE_PATROL_INTERVAL;
+                return;
+            }
+            ai.patrolWpX = xf.x;
+            ai.patrolWpY = xf.y;
+            ai.patrolTimer = ZOMBIE_PATROL_INTERVAL;
+            return;
+        }
+    }
+
     float angle  = static_cast<float>(std::rand() % 360) * (3.14159265f / 180.0f);
     float radius = 64.0f + static_cast<float>(std::rand() % 128);
     ai.patrolWpX   = xf.x + std::cos(angle) * radius;
     ai.patrolWpY   = xf.y + std::sin(angle) * radius;
+    if (m_map && m_map->isSolid(TileMap::worldToTile(ai.patrolWpX),
+                                TileMap::worldToTile(ai.patrolWpY))) {
+        ai.patrolWpX = xf.x;
+        ai.patrolWpY = xf.y;
+    }
     ai.patrolTimer = ZOMBIE_PATROL_INTERVAL;
 }
 

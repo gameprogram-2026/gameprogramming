@@ -83,8 +83,9 @@ public:
     /// 플레이어가 상호작용(F키)을 눌렀을 때 호출됨
     bool startChanneling(uint32_t netID, float wx, float wy, float currentHp);
 
-    const PlayerExtractionState* stateOf(uint32_t netID) const;
     float channelProgress(uint32_t netID) const; ///< [0,1]
+    const PlayerExtractionState* stateOf(uint32_t netID) const;
+    uint8_t channelZoneID(uint32_t netID) const;
 
 private:
     std::array<ExtractionZone, MAX_EXTRACTION_ZONES> m_zones{};

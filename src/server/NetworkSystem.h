@@ -40,6 +40,8 @@ public:
     using BuildCB        = std::function<void(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction)>;
     using CraftCB        = std::function<void(uint32_t peerIdx, uint8_t recipeID)>;
     using LootPickupCB   = std::function<void(uint32_t peerIdx, uint32_t lootNetID)>;
+    using ItemDropCB     = std::function<void(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint16_t quantity)>;
+    using DismantleCB    = std::function<void(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx)>;
     using AuthHandler    = std::function<void(uint32_t peerIdx, const char* user, const char* pass, bool isRegister)>;
 
     using JoinHandler    = std::function<void(uint32_t peerIdx)>;
@@ -88,6 +90,8 @@ public:
     void onBuildPlace(BuildCB cb)        { m_onBuild = std::move(cb); }
     void onCraft(CraftCB cb)             { m_onCraft = std::move(cb); }
     void onLootPickup(LootPickupCB cb)   { m_onLootPickup = std::move(cb); }
+    void onItemDrop(ItemDropCB cb)        { m_onItemDrop = std::move(cb); }
+    void onDismantle(DismantleCB cb)      { m_onDismantle = std::move(cb); }
 
     const PeerInfo& peer(uint32_t idx) const { return m_peers[idx]; }
     int  connectedCount() const;
@@ -113,6 +117,8 @@ private:
     BuildCB         m_onBuild;
     CraftCB         m_onCraft;
     LootPickupCB    m_onLootPickup;
+    ItemDropCB      m_onItemDrop;
+    DismantleCB     m_onDismantle;
 
     uint32_t assignPeerSlot(ENetPeer* peer);
     void     handlePacket(uint32_t peerIdx, const uint8_t* data, size_t len);

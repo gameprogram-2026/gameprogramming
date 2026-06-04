@@ -160,4 +160,11 @@ float ExtractionSystem::channelProgress(uint32_t netID) const {
     return 0.0f;
 }
 
+uint8_t ExtractionSystem::channelZoneID(uint32_t netID) const {
+    for (const auto& entry : m_states) {
+        if (entry.entityID == netID) return entry.state.zoneID;
+    }
+    return 0xFF;
+}
+
 } // namespace dz
