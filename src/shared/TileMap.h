@@ -63,6 +63,15 @@ public:
     };
     const std::vector<ExtZone>& getExtractionZones() const { return m_extractionZones; }
 
+    struct DistrictDef {
+        uint8_t id = 0;
+        int x = 0, y = 0, w = 0, h = 0;
+        int theme = 0;
+        std::string key;
+        std::string label;
+    };
+    const std::vector<DistrictDef>& getDistricts() const { return m_districts; }
+
     struct BuildingDef {
         int x, y, w, h;
         int theme;
@@ -75,6 +84,9 @@ public:
         int tx = 0;
         int ty = 0;
         bool open = false;
+        bool broken = false;
+        float hp = 100.0f;
+        float maxHp = 100.0f;
     };
     const std::vector<DoorDef>& getDoors() const { return m_doors; }
 
@@ -122,12 +134,17 @@ public:
     void initializeBuildingDoors(bool openByDefault = false);
     bool setDoorOpen(uint16_t doorID, bool open);
     bool toggleDoor(uint16_t doorID);
+    bool setDoorBroken(uint16_t doorID, bool broken);
+    bool damageDoor(uint16_t doorID, float damage);
+    bool repairDoor(uint16_t doorID);
+    int findDoorAt(int tx, int ty) const;
     int findNearestDoor(float wx, float wy, float maxDist) const;
 
 private:
     int              m_w = 0, m_h = 0;
     std::vector<Tile> m_tiles;
     std::vector<ExtZone> m_extractionZones;
+    std::vector<DistrictDef> m_districts;
     std::vector<BuildingDef> m_buildings;
     std::vector<DoorDef> m_doors;
     std::vector<PlayerSpawn> m_playerSpawns;

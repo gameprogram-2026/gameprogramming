@@ -9,6 +9,7 @@
 #include "server/ZombieAI.h"
 #include <cstring>
 #include <algorithm>
+#include <vector>
 
 namespace dz {
 
@@ -109,7 +110,21 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
         count = 0;
     };
 
-    for (EntityID id : world.alive()) {
+    std::vector<EntityID> ordered = world.alive();
+    std::stable_sort(ordered.begin(), ordered.end(), [&](EntityID a, EntityID b) {
+        Entity ea{a};
+        Entity eb{b};
+        auto priority = [&](Entity e) {
+            if (world.tryGet<BuildingComponent>(e)) return 0;
+            auto* hp = world.tryGet<HealthComponent>(e);
+            if (hp && hp->team != Team::Neutral) return 1;
+            if (!hp) return 2;
+            return 3;
+        };
+        return priority(ea) < priority(eb);
+    });
+
+    for (EntityID id : ordered) {
         Entity e{id};
 
         auto* net = world.tryGet<NetworkComponent>(e);
@@ -310,6 +325,20 @@ void NetworkSystem::handlePacket(uint32_t peerIdx,
         LootPickupPacket pkt{};
         std::memcpy(&pkt, data, sizeof(pkt));
         if (m_onLootPickup) m_onLootPickup(peerIdx, pkt.lootNetID);
+        break;
+    }
+    case PacketType::C2S_ItemDrop: {
+        if (len < sizeof(ItemDropPacket)) return;
+        ItemDropPacket pkt{};
+        std::memcpy(&pkt, data, sizeof(pkt));
+        if (m_onItemDrop) m_onItemDrop(peerIdx, pkt.srcType, pkt.srcIdx, pkt.quantity);
+        break;
+    }
+    case PacketType::C2S_DismantleItem: {
+        if (len < sizeof(DismantleItemPacket)) return;
+        DismantleItemPacket pkt{};
+        std::memcpy(&pkt, data, sizeof(pkt));
+        if (m_onDismantle) m_onDismantle(peerIdx, pkt.srcType, pkt.srcIdx);
         break;
     }
     default:

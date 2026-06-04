@@ -59,6 +59,7 @@ constexpr int EQUIPMENT_SLOT_COUNT = static_cast<int>(EquipSlot::SlotCount);
 // ─────────────────────────────────────────────────────────────────────────────
 
 constexpr int INVENTORY_GRID_SLOTS = 20;
+constexpr float DEFAULT_MAX_CARRY_WEIGHT = 150.0f;
 
 struct InventoryComponent {
     // ── Grid inventory (backpack / pockets) ───────────────────────────────────
@@ -75,7 +76,7 @@ struct InventoryComponent {
     std::array<Item, EQUIPMENT_SLOT_COUNT> equipped{};
 
     // ── Weight tracking ───────────────────────────────────────────────────────
-    float maxCarryWeight  = 999.0f; ///< Keep looting permissive until backpack limits are finalized
+    float maxCarryWeight  = DEFAULT_MAX_CARRY_WEIGHT;
     float currentWeight   = 0.0f;
 
     // ── Active weapon reference ───────────────────────────────────────────────

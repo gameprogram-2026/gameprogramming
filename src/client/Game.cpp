@@ -13,6 +13,47 @@
 
 namespace dz {
 
+namespace {
+struct DismantlePreviewResult {
+    const char* key;
+    int qty;
+};
+
+struct DismantlePreviewRecipe {
+    const char* source;
+    DismantlePreviewResult results[3];
+    int resultCount;
+};
+
+const DismantlePreviewRecipe* findDismantlePreview(const std::string& key) {
+    static const DismantlePreviewRecipe recipes[] = {
+        {"scrap_pipe",   {{"scrap_metal", 1}, {"", 0}, {"", 0}}, 1},
+        {"nail_bat",     {{"plank", 1}, {"scrap_metal", 1}, {"", 0}}, 2},
+        {"fire_axe",     {{"scrap_metal", 2}, {"", 0}, {"", 0}}, 1},
+        {"pistol_9mm",   {{"scrap_metal", 2}, {"electronic_part", 1}, {"", 0}}, 2},
+        {"smg_9mm",      {{"scrap_metal", 3}, {"electronic_part", 1}, {"", 0}}, 2},
+        {"flamethrower", {{"scrap_metal", 3}, {"oil", 2}, {"electronic_part", 1}}, 3},
+        {"molotov",      {{"oil", 1}, {"", 0}, {"", 0}}, 1},
+    };
+    for (const auto& recipe : recipes) {
+        if (key == recipe.source) return &recipe;
+    }
+    return nullptr;
+}
+
+std::string formatDismantlePreview(const DismantlePreviewRecipe& recipe) {
+    std::string out = "분해 결과: ";
+    for (int i = 0; i < recipe.resultCount; ++i) {
+        if (i > 0) out += ", ";
+        out += getDisplayName(recipe.results[i].key);
+        out += " x";
+        out += std::to_string(recipe.results[i].qty);
+    }
+    out += " / X 다시 누르면 분해";
+    return out;
+}
+} // namespace
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Game constructor
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,6 +76,7 @@ void Game::tryInteract() {
     int doorID = m_map.findNearestDoor(m_net.localX(), m_net.localY(), TILE_SIZE * 2.0f);
     if (doorID >= 0) {
         const auto& door = m_map.getDoors()[doorID];
+        if (door.broken) return;
         m_net.sendDoorToggle(static_cast<uint16_t>(doorID));
         m_notifyMsg = door.open ? "문을 닫는 중..." : "문을 여는 중...";
         m_notifyTimer = 1.0f;
@@ -44,10 +86,22 @@ void Game::tryInteract() {
     if (m_nearestInteractNetID < 0) return;
     
     if (m_nearestInteractType == REC_LOOT) {
+        const bool inventoryFull = m_inventory.usedSlots >= 20 ||
+                                   m_inventory.totalWeight >= m_inventory.maxWeight;
+        if (inventoryFull) {
+            m_notifyMsg = "가방이 가득 찼습니다.";
+            m_notifyTimer = 1.2f;
+            return;
+        }
+
         const int pickedNetID = m_nearestInteractNetID;
-        if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), pickedNetID) ==
-            m_clientHiddenNetIDs.end()) {
-            m_clientHiddenNetIDs.push_back(pickedNetID);
+        auto it = std::find_if(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(),
+                               [&](const PendingHiddenLoot& h) { return h.netID == pickedNetID; });
+        const uint32_t hideUntil = SDL_GetTicks() + 1250;
+        if (it == m_clientHiddenNetIDs.end()) {
+            m_clientHiddenNetIDs.push_back({pickedNetID, hideUntil});
+        } else {
+            it->expiresAtMs = hideUntil;
         }
         m_net.sendLootPickup(static_cast<uint32_t>(pickedNetID));
         m_audio.playSound("loot");
@@ -690,6 +744,122 @@ void Game::useConsumable(int gridIdx) {
 // 인벤토리 마우스 — 드래그 앤 드롭 처리
 // ─────────────────────────────────────────────────────────────────────────────
 void Game::processInventoryMouse() {
+    bool curX = m_input.isKeyDown(SDL_SCANCODE_X);
+    if (curX && !m_prevX && !m_dropDialog.active && !m_drag.active) {
+        const uint32_t nowMs = SDL_GetTicks();
+        if (m_dismantleConfirm.active && nowMs >= m_dismantleConfirm.expiresAtMs) {
+            m_dismantleConfirm = {};
+        }
+
+        int mx, my;
+        m_input.mousePos(mx, my);
+        DragState::Src src;
+        int idx = -1;
+        if (hitTestInventorySlot(mx, my, src, idx) && src != DragState::Src::Stash) {
+            InventoryItem item;
+            if (src == DragState::Src::Grid && idx >= 0 && idx < 20)
+                item = m_inventory.gridSlots[idx];
+            else if (src == DragState::Src::Primary)
+                item = m_inventory.primaryWeapon;
+            else if (src == DragState::Src::Secondary)
+                item = m_inventory.secondaryWeapon;
+
+            if (item.isValid()) {
+                const DismantlePreviewRecipe* recipe = findDismantlePreview(item.name);
+                if (!recipe) {
+                    m_dismantleConfirm = {};
+                    m_notifyMsg = "분해할 수 없는 아이템입니다.";
+                    m_notifyTimer = 1.5f;
+                    m_prevX = curX;
+                    return;
+                }
+
+                uint8_t srcType = 0;
+                uint8_t srcIdx = 0;
+                if (src == DragState::Src::Grid) {
+                    srcType = 0;
+                    srcIdx = static_cast<uint8_t>(std::max(0, idx));
+                } else if (src == DragState::Src::Primary) {
+                    srcType = 1;
+                } else if (src == DragState::Src::Secondary) {
+                    srcType = 2;
+                }
+
+                const bool confirmed = m_dismantleConfirm.active &&
+                                       m_dismantleConfirm.src == src &&
+                                       m_dismantleConfirm.gridIdx == idx &&
+                                       m_dismantleConfirm.itemName == item.name &&
+                                       nowMs < m_dismantleConfirm.expiresAtMs;
+                if (confirmed) {
+                    m_net.sendDismantleItem(srcType, srcIdx);
+                    m_notifyMsg = "아이템 분해 요청";
+                    m_notifyTimer = 1.5f;
+                    m_dismantleConfirm = {};
+                } else {
+                    m_dismantleConfirm.active = true;
+                    m_dismantleConfirm.src = src;
+                    m_dismantleConfirm.gridIdx = idx;
+                    m_dismantleConfirm.itemName = item.name;
+                    m_dismantleConfirm.expiresAtMs = nowMs + 4000;
+                    m_notifyMsg = formatDismantlePreview(*recipe);
+                    m_notifyTimer = 4.0f;
+                }
+            }
+        }
+    }
+    m_prevX = curX;
+
+    if (m_dropDialog.active) {
+        int mx, my;
+        if (!m_input.consumeClick(mx, my)) return;
+
+        const int W = 360;
+        const int H = 210;
+        const int X = m_camera.screenW / 2 - W / 2;
+        const int Y = m_camera.screenH / 2 - H / 2;
+        auto hit = [&](int x, int y, int w, int h) {
+            return mx >= x && mx < x + w && my >= y && my < y + h;
+        };
+
+        const int stepY = Y + 100;
+        if (hit(X + 86, stepY, 44, 44)) {
+            m_dropDialog.quantity = std::max(1, m_dropDialog.quantity - 1);
+            return;
+        }
+        if (hit(X + 244, stepY, 44, 44)) {
+            m_dropDialog.quantity = std::min(m_dropDialog.item.qty, m_dropDialog.quantity + 1);
+            return;
+        }
+        if (hit(X + 64, Y + 158, 120, 38)) {
+            uint8_t srcType = 0;
+            uint8_t srcIdx = 0;
+            if (m_dropDialog.src == DragState::Src::Grid) {
+                srcType = 0;
+                srcIdx = static_cast<uint8_t>(std::max(0, m_dropDialog.gridIdx));
+            } else if (m_dropDialog.src == DragState::Src::Primary) {
+                srcType = 1;
+            } else if (m_dropDialog.src == DragState::Src::Secondary) {
+                srcType = 2;
+            } else {
+                m_dropDialog = {};
+                return;
+            }
+
+            m_net.sendItemDrop(srcType, srcIdx,
+                               static_cast<uint16_t>(std::max(1, m_dropDialog.quantity)));
+            m_notifyMsg = "아이템을 버렸습니다.";
+            m_notifyTimer = 1.5f;
+            m_dropDialog = {};
+            return;
+        }
+        if (hit(X + 196, Y + 158, 100, 38) ||
+            mx < X || mx >= X + W || my < Y || my >= Y + H) {
+            m_dropDialog = {};
+            return;
+        }
+        return;
+    }
+
     // ── 우클릭: 건축 재료 → 건설 모드 진입 (인게임 전용) ──────────────────────
     {
         int rx, ry;
@@ -806,9 +976,23 @@ void Game::processInventoryMouse() {
 
                     uint8_t st = static_cast<uint8_t>(m_drag.src) - 1;
                     uint8_t dt = static_cast<uint8_t>(dstSrc) - 1;
-                    m_net.sendStashTransfer(st, m_drag.gridIdx, dt, dstIdx);
+                    auto netSlotIndex = [](DragState::Src src, int idx) -> uint8_t {
+                        return (src == DragState::Src::Primary || src == DragState::Src::Secondary)
+                                 ? 0
+                                 : static_cast<uint8_t>(std::max(0, idx));
+                    };
+                    m_net.sendStashTransfer(st, netSlotIndex(m_drag.src, m_drag.gridIdx),
+                                            dt, netSlotIndex(dstSrc, dstIdx));
                 }
             }
+        } else if (m_state == GameState::InGame &&
+                   m_drag.src != DragState::Src::Stash &&
+                   m_drag.item.isValid()) {
+            m_dropDialog.active = true;
+            m_dropDialog.src = m_drag.src;
+            m_dropDialog.gridIdx = m_drag.gridIdx;
+            m_dropDialog.item = m_drag.item;
+            m_dropDialog.quantity = 1;
         }
 
         m_drag.active  = false;
@@ -825,7 +1009,7 @@ void Game::processCraftingMouse() {
     int mouseX, mouseY;
     if (!m_input.consumeClick(mouseX, mouseY)) return;
 
-    const int CW = 540, CH = 460;
+    const int CW = 540, CH = 560;
     const int boxX = m_camera.screenW / 2 - CW / 2;
     const int boxY = m_camera.screenH / 2 - CH / 2;
     const int ROW_H = 76;
@@ -946,7 +1130,7 @@ void Game::processEvents() {
     bool curC = m_input.isKeyDown(SDL_SCANCODE_C);
 
     auto enterBuild = [&](int type) {
-        static const char* names[] = {"바리케이드 (Z)", "포탑 (X)", "제작대 (C)"};
+        static const char* names[] = {"바리케이드", "포탑", "제작대", "문"};
         static const char* dirs[]  = {"북", "동", "남", "서"};
         if (m_buildMode && m_buildType == type) {
             m_buildMode = false;
@@ -955,12 +1139,21 @@ void Game::processEvents() {
             m_buildMode = true;
             m_buildType = type;
             if (type == 1) // 포탑
-                m_notifyMsg = std::string("포탑 (X) ") + dirs[m_turretDir] + "향 — R: 회전 / 클릭: 설치";
+                m_notifyMsg = std::string("포탑 ") + dirs[m_turretDir] + "향 — R: 회전 / 클릭: 설치";
+            else if (type == static_cast<int>(BuildingType::Door))
+                m_notifyMsg = "문 — 부서진 문 위치에서 클릭으로 설치";
             else
                 m_notifyMsg = std::string(names[type]) + " — 클릭으로 설치 / 다시 누르면 취소";
         }
         m_notifyTimer = 2.0f;
     };
+
+    static bool prevV = false;
+    bool curV = m_input.isKeyDown(SDL_SCANCODE_V);
+    if (curV && !prevV && m_buildMode) {
+        enterBuild((m_buildType + 1) % 4);
+    }
+    prevV = curV;
 
     // R키 — 포탑 방향 회전 (포탑 모드일 때만)
     static bool prevR = false;
@@ -984,8 +1177,22 @@ void Game::processEvents() {
         if (m_input.consumeClick(cx, cy)) {
             float wx = (cx - m_camera.screenW * 0.5f) / m_camera.zoom + m_camera.x;
             float wy = (cy - m_camera.screenH * 0.5f) / m_camera.zoom + m_camera.y;
-            m_net.sendBuildPlace(static_cast<int16_t>(wx / TILE_SIZE),
-                                 static_cast<int16_t>(wy / TILE_SIZE),
+            int tileX = static_cast<int>(wx / 32.0f);
+            int tileY = static_cast<int>(wy / 32.0f);
+            if (m_buildType == static_cast<int>(BuildingType::Door)) {
+                int doorID = m_map.findNearestDoor(wx, wy, TILE_SIZE * 1.5f);
+                if (doorID < 0 ||
+                    static_cast<size_t>(doorID) >= m_map.getDoors().size() ||
+                    !m_map.getDoors()[doorID].broken) {
+                    m_notifyMsg = "부서진 문 위치에서만 문을 설치할 수 있습니다.";
+                    m_notifyTimer = 1.5f;
+                    return;
+                }
+                tileX = m_map.getDoors()[doorID].tx;
+                tileY = m_map.getDoors()[doorID].ty;
+            }
+            m_net.sendBuildPlace(static_cast<int16_t>(tileX),
+                                 static_cast<int16_t>(tileY),
                                  static_cast<uint8_t>(m_buildType),
                                  static_cast<uint8_t>(m_buildType == 1 ? m_turretDir : 0));
         }
@@ -997,14 +1204,64 @@ void Game::processEvents() {
          !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
         m_hotbarSelected = 0;
     }
+
+    bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
+    if (curQ && !m_prevQ) {
+        const bool primaryReady = m_inventory.primaryWeapon.isValid() &&
+                                  ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name);
+        const bool secondaryReady = m_inventory.secondaryWeapon.isValid() &&
+                                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name);
+        if (m_hotbarSelected == 0 && secondaryReady) {
+            m_hotbarSelected = 1;
+            m_net.sendSelectWeapon(1);
+            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+        } else if (primaryReady) {
+            m_hotbarSelected = 0;
+            m_net.sendSelectWeapon(0);
+            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+        }
+    }
+    m_prevQ = curQ;
+
+    static const SDL_Scancode NUM_SCANCODES[5] = {
+        SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5
+    };
+    int hotbarConsIdx[3];
+    getHotbarConsumables(hotbarConsIdx);
+    for (int i = 0; i < 5; ++i) {
+        bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
+        if (cur && !m_prevNum[i]) {
+            if (i == 0) {
+                if (m_inventory.primaryWeapon.isValid() &&
+                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
+                    m_hotbarSelected = 0;
+                    m_net.sendSelectWeapon(0);
+                    m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+                }
+            } else if (i == 1) {
+                if (m_inventory.secondaryWeapon.isValid() &&
+                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name)) {
+                    m_hotbarSelected = 1;
+                    m_net.sendSelectWeapon(1);
+                    m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+                }
+            } else {
+                m_hotbarSelected = i;
+                useConsumable(hotbarConsIdx[i-2]);
+            }
+        }
+        m_prevNum[i] = cur;
+    }
+
     const auto& activeWeapon = (m_hotbarSelected == 1)
                                  ? m_inventory.secondaryWeapon
                                  : m_inventory.primaryWeapon;
     const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
     const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
+    const bool isSMG = hasWeapon && activeWeapon.name == "smg_9mm";
     const bool isFlamethrower = hasWeapon && activeWeapon.name == "flamethrower";
-    const bool isRanged = isPistol || isFlamethrower;
-    if (!isPistol) {
+    const bool isRanged = isPistol || isSMG || isFlamethrower;
+    if (!isPistol && !isSMG) {
         m_curInput.actions &= ~ACT_RELOAD;
     }
 
@@ -1018,7 +1275,7 @@ void Game::processEvents() {
             } else {
                 m_curInput.actions &= ~ACT_SHOOT;
             }
-            if (isPistol && wpn.qty <= 0) {
+            if ((isPistol || isSMG) && wpn.qty <= 0) {
                 m_curInput.actions &= ~ACT_SHOOT;
                 int reserve = 0;
                 for (const auto& slot : m_inventory.gridSlots) {
@@ -1031,13 +1288,13 @@ void Game::processEvents() {
                     m_audio.playSound("dry_fire", 0.6f);
                 }
             } else if (m_attackTimer <= 0.0f) { 
-                m_attackTimer = 0.35f; 
+                m_attackTimer = isSMG ? 0.09f : 0.35f;
                 m_attackAngle = m_curInput.aimAngle; 
                 
-                if (isPistol) {
+                if (isPistol || isSMG) {
                     m_audio.playSound("shoot", 0.7f);
-                    m_cameraShakeTimer = 0.15f;
-                    m_cameraShakeIntensity = 6.0f;
+                    m_cameraShakeTimer = isSMG ? 0.06f : 0.15f;
+                    m_cameraShakeIntensity = isSMG ? 3.0f : 6.0f;
                     m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
                     m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
                 } else if (isFlamethrower) {
@@ -1057,22 +1314,6 @@ void Game::processEvents() {
     if (curF && !m_prevF) tryInteract();
     m_prevF = curF;
 
-    bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
-    if (curQ && !m_prevQ) {
-        const bool primaryReady = m_inventory.primaryWeapon.isValid() &&
-                                  ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name);
-        const bool secondaryReady = m_inventory.secondaryWeapon.isValid() &&
-                                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name);
-        if (m_hotbarSelected == 0 && secondaryReady) {
-            m_hotbarSelected = 1;
-            m_net.sendSelectWeapon(1);
-        } else if (primaryReady) {
-            m_hotbarSelected = 0;
-            m_net.sendSelectWeapon(0);
-        }
-    }
-    m_prevQ = curQ;
-
     static bool prevT = false;
     bool curT = m_input.isKeyDown(SDL_SCANCODE_T);
     if (curT && !prevT) {
@@ -1083,33 +1324,6 @@ void Game::processEvents() {
     }
     prevT = curT;
 
-    static const SDL_Scancode NUM_SCANCODES[5] = {
-        SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5
-    };
-    int hotbarConsIdx[3];
-    getHotbarConsumables(hotbarConsIdx);
-    for (int i = 0; i < 5; ++i) {
-        bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
-        if (cur && !m_prevNum[i]) {
-            if (i == 0) {
-                if (m_inventory.primaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
-                    m_hotbarSelected = 0;
-                    m_net.sendSelectWeapon(0);
-                }
-            } else if (i == 1) {
-                if (m_inventory.secondaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name)) {
-                    m_hotbarSelected = 1;
-                    m_net.sendSelectWeapon(1);
-                }
-            } else {
-                m_hotbarSelected = i;
-                useConsumable(hotbarConsIdx[i-2]);
-            }
-        }
-        m_prevNum[i] = cur;
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1184,6 +1398,12 @@ void Game::update(float dt) {
     m_net.applyPrediction(m_curInput, dt);
     m_net.sendInput(m_curInput);
     m_net.update(dt);
+
+    const uint32_t nowMs = SDL_GetTicks();
+    m_clientHiddenNetIDs.erase(
+        std::remove_if(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(),
+                       [&](const PendingHiddenLoot& h) { return nowMs >= h.expiresAtMs; }),
+        m_clientHiddenNetIDs.end());
 
     bool currM = m_input.isKeyDown(SDL_SCANCODE_M);
     if (currM && !m_prevM) {
@@ -1293,17 +1513,37 @@ void Game::update(float dt) {
     m_nearestInteractNetID = -1;
     m_nearestInteractType = 0;
     m_interactPrompt.clear();
+    m_interactPromptBlocked = false;
+    const bool inventoryFull = m_inventory.usedSlots >= 20 ||
+                               m_inventory.totalWeight >= m_inventory.maxWeight;
+
+    constexpr float EXTRACTION_PROMPT_RADIUS = 72.0f;
+    const float extractionPromptR2 = EXTRACTION_PROMPT_RADIUS * EXTRACTION_PROMPT_RADIUS;
+    for (const auto& zone : m_extractionZones) {
+        float dx = zone.first - lx;
+        float dy = zone.second - ly;
+        if (dx * dx + dy * dy <= extractionPromptR2) {
+            if (m_zonesOpen) {
+                m_interactPrompt = (m_net.extractionProgress() > 0.0f)
+                                     ? "[F] 탈출 진행 중 - 움직이지 마세요"
+                                     : "[F] 탈출 시작";
+            } else {
+                m_interactPrompt = "탈출구 잠김";
+            }
+            break;
+        }
+    }
 
     int doorID = m_map.findNearestDoor(lx, ly, TILE_SIZE * 2.0f);
     if (doorID >= 0) {
         const auto& door = m_map.getDoors()[doorID];
-        m_interactPrompt = door.open ? "[F] 문 닫기" : "[F] 문 열기";
+        m_interactPrompt = door.broken ? "부서진 문" : (door.open ? "[F] 문 닫기" : "[F] 문 열기");
     }
 
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
-        if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), rem.entityID) !=
-            m_clientHiddenNetIDs.end()) {
+        if (std::any_of(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(),
+                        [&](const PendingHiddenLoot& h) { return h.netID == rem.entityID; })) {
             continue;
         }
         float dx = rem.snap[1].x - lx;
@@ -1332,10 +1572,15 @@ void Game::update(float dt) {
     }
 
     if (m_interactPrompt.empty() && m_nearestInteractNetID >= 0) {
-        m_interactPrompt = (m_nearestInteractType == REC_BUILDING &&
-                            bestBuildingType == static_cast<uint8_t>(BuildingType::Workbench))
-                             ? "[F] 제작대 사용"
-                             : "[F] 파밍";
+        if (m_nearestInteractType == REC_BUILDING &&
+            bestBuildingType == static_cast<uint8_t>(BuildingType::Workbench)) {
+            m_interactPrompt = "[F] 제작대 사용";
+        } else if (inventoryFull) {
+            m_interactPrompt = "[F] 파밍 불가";
+            m_interactPromptBlocked = true;
+        } else {
+            m_interactPrompt = "[F] 파밍";
+        }
     }
 }
 
@@ -1355,7 +1600,8 @@ void Game::renderIngame() {
     for (int i = 0; i < m_net.remoteCount(); ++i) {
         const auto& rem = m_net.remotes()[i];
         if (rem.recType == REC_LOOT || rem.recType == REC_BUILDING) {
-            if (std::find(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(), rem.entityID) != m_clientHiddenNetIDs.end()) {
+            if (std::any_of(m_clientHiddenNetIDs.begin(), m_clientHiddenNetIDs.end(),
+                            [&](const PendingHiddenLoot& h) { return h.netID == rem.entityID; })) {
                 continue; // 클라이언트가 이미 주운 아이템
             }
             LootBoxView v;
@@ -1363,6 +1609,9 @@ void Game::renderIngame() {
             v.wy = rem.snap[1].y;
             v.looted = false; 
             v.nearPlayer = (rem.entityID == m_nearestInteractNetID);
+            v.blocked = (rem.recType == REC_LOOT && v.nearPlayer &&
+                         (m_inventory.usedSlots >= 20 ||
+                          m_inventory.totalWeight >= m_inventory.maxWeight));
             v.isBuilding   = (rem.recType == REC_BUILDING);
             v.buildingType = rem.snap[1].statusFlags & 0x0F;        // bits0-3: 건물 유형
             v.turretDir    = (rem.snap[1].statusFlags >> 4) & 0x03; // bits4-5: 포탑 방향
@@ -1383,7 +1632,7 @@ void Game::renderIngame() {
     std::string wName;
     if (hudWeapon.isValid()) {
         wName = hudWeapon.name;
-        if (hudWeapon.name == "pistol_9mm") {
+        if (hudWeapon.name == "pistol_9mm" || hudWeapon.name == "smg_9mm") {
             int reserve = 0;
             for (const auto& slot : m_inventory.gridSlots) {
                 if (slot.isValid() && slot.name == "ammo_9mm") reserve += slot.qty;
@@ -1406,6 +1655,12 @@ void Game::renderIngame() {
     // 5-b. 시야각 안개 (120도, 마우스 방향)
     m_renderer.drawFOV(m_net.localX(), m_net.localY(),
                        m_curInput.aimAngle, m_camera, static_cast<float>(m_net.gameTime()));
+    {
+        float timeOfDay = std::fmod(static_cast<float>(m_net.gameTime()), 180.0f);
+        if (timeOfDay > 120.0f) {
+            m_renderer.drawBuildingEntitiesOverlay(views, m_camera);
+        }
+    }
 
     if (m_hitFlashTimer > 0.0f) {
         SDL_SetRenderDrawBlendMode(m_renderer.sdlRenderer(), SDL_BLENDMODE_BLEND);
@@ -1447,7 +1702,7 @@ void Game::renderIngame() {
     // 7-b. 건설 모드 오버레이
     {
         int mx, my; m_input.mousePos(mx, my);
-        m_renderer.drawBuildModeOverlay(m_buildMode, m_buildType, mx, my, m_camera, m_turretDir);
+        m_renderer.drawBuildModeOverlay(m_buildMode, m_buildType, mx, my, m_camera, &m_map, m_turretDir);
         if (m_buildMode) {
             m_renderer.drawBuildRecipePanel(m_inventory, m_buildType);
         }
@@ -1460,10 +1715,13 @@ void Game::renderIngame() {
     if (!m_interactPrompt.empty()) {
         TTF_Font* f = m_renderer.debugFont();
         int y = m_camera.screenH - 148;
+        SDL_Color promptColor = m_interactPromptBlocked
+                              ? SDL_Color{255, 80, 80, 255}
+                              : SDL_Color{255, 240, 160, 255};
         m_renderer.drawText(m_interactPrompt, m_camera.screenW / 2 + 2, y + 2,
                             {0, 0, 0, 180}, f, true);
         m_renderer.drawText(m_interactPrompt, m_camera.screenW / 2, y,
-                            {255, 240, 160, 255}, f, true);
+                            promptColor, f, true);
     }
 
     // 8. 핫바 (항상 표시)
@@ -1481,6 +1739,11 @@ void Game::renderIngame() {
         m_input.mousePos(mx, my);
         const InventoryItem* dragPtr = m_drag.active ? &m_drag.item : nullptr;
         m_renderer.drawInventory(m_inventory, mx, my, dragPtr);
+        if (m_dropDialog.active) {
+            m_renderer.drawDropQuantityDialog(m_dropDialog.item,
+                                              m_dropDialog.quantity,
+                                              mx, my);
+        }
     } else if (m_showCrafting) {
         int mx, my;
         m_input.mousePos(mx, my);

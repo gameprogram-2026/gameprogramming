@@ -27,6 +27,7 @@ ItemDef itemDefForKey(const std::string& key) {
     if (key == "pistol_9mm")      return {4,  ItemCategory::Weapon,        1.0f};
     if (key == "molotov")         return {5,  ItemCategory::Throwable,     0.5f};
     if (key == "flamethrower")    return {6,  ItemCategory::Weapon,        5.0f};
+    if (key == "smg_9mm")         return {7,  ItemCategory::Weapon,        2.4f};
     if (key == "ammo_9mm")        return {10, ItemCategory::Ammo,          0.3f};
     if (key == "scrap_metal")     return {20, ItemCategory::BuildMaterial, 1.0f};
     if (key == "plank")           return {21, ItemCategory::BuildMaterial, 0.8f};
@@ -41,13 +42,34 @@ ItemDef itemDefForKey(const std::string& key) {
 
 } // namespace
 
+struct RangedWeaponStats {
+    int magCapacity;
+    float damage;
+    float fireRate;
+    float reloadTime;
+    float noiseRadius;
+};
+
+bool statsForRangedWeapon(const std::string& key, RangedWeaponStats& out) {
+    if (key == "pistol_9mm") {
+        out = {PISTOL_MAG_CAPACITY, 60.0f, 0.30f, 2.0f, NOISE_PISTOL_RADIUS};
+        return true;
+    }
+    if (key == "smg_9mm") {
+        out = {30, 24.0f, 0.09f, 2.3f, NOISE_RIFLE_RADIUS};
+        return true;
+    }
+    return false;
+}
+
 void GameLogic::processInput(uint32_t ownerID, const InputPacket& pkt) {
     if (pkt.actions & (ACT_SHOOT | ACT_MELEE)) {
         Entity e = findOwnedEntity(ownerID);
         auto* inv = e.isValid() ? m_world.tryGet<InventoryComponent>(e) : nullptr;
         const Item* weapon = (inv && inv->activeWeapon().isValid()) ? &inv->activeWeapon() : nullptr;
 
-        if (weapon && weapon->key == "pistol_9mm") {
+        RangedWeaponStats stats{};
+        if (weapon && statsForRangedWeapon(weapon->key, stats)) {
             handleRangedFire(ownerID, pkt.aimAngle);
         } else if (weapon && weapon->key == "flamethrower") {
             handleFlamethrowerBurst(ownerID, pkt.aimAngle);
@@ -157,25 +179,24 @@ void GameLogic::handleRangedFire(uint32_t ownerID, float aimAngle) {
     auto* cbt = m_world.tryGet<CombatComponent>(e);
     if (!hp || !hp->isAlive || !xf || !cbt) return;
     if (cbt->fireCooldown > 0.0f || cbt->isReloading) return;
-    // Determine damage and noise from equipped weapon
-    float damage  = 60.0f;
-    float noiseR  = NOISE_PISTOL_RADIUS;
     auto* inv = m_world.tryGet<InventoryComponent>(e);
     if (!inv) return;
     
     Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
     if (!w.isValid() || w.category != ItemCategory::Weapon) return;
-    if (w.key != "pistol_9mm") return; // 현재는 권총만 사격 지원
+    RangedWeaponStats stats{};
+    if (!statsForRangedWeapon(w.key, stats)) return;
+    cbt->magCapacity = stats.magCapacity;
+    cbt->fireRate = stats.fireRate;
+    cbt->reloadTime = stats.reloadTime;
     if (w.quantity <= 0) {
         handleReload(ownerID);
         return;
     }
 
-    damage = 60.0f; noiseR = NOISE_PISTOL_RADIUS;
-
     --w.quantity; // 잔탄 1 감소
     cbt->fireCooldown = cbt->fireRate;
-    cbt->emitNoise(noiseR, 3); // Loud
+    cbt->emitNoise(stats.noiseRadius, 3); // Loud
     
     // 탄약 변경 사항을 클라이언트에 동기화
     auto* net = m_world.tryGet<NetworkComponent>(e);
@@ -209,8 +230,8 @@ void GameLogic::handleRangedFire(uint32_t ownerID, float aimAngle) {
             if (!txf || !thp || !thp->isAlive) continue;
             float dx = txf->x - bx, dy = txf->y - by;
             if (dx*dx + dy*dy < HIT_R2) {
-                m_combat.applyDamage(m_world, target, e, damage, DamageType::Bullet);
-                DZ_LOG_DEBUG("[Logic] Bullet hit entity %u for %.0f dmg", tid, damage);
+                m_combat.applyDamage(m_world, target, e, stats.damage, DamageType::Bullet);
+                DZ_LOG_DEBUG("[Logic] Bullet hit entity %u for %.0f dmg", tid, stats.damage);
                 
                 auto* net = m_world.tryGet<NetworkComponent>(e);
                 if (m_onRangedFire && net) {
@@ -250,7 +271,11 @@ void GameLogic::handleReload(uint32_t ownerID) {
     if (!cbt || !inv || cbt->isReloading) return;
     
     Item& w = inv->equipped[static_cast<int>(inv->activeWeaponSlot)];
-    if (!w.isValid() || w.key != "pistol_9mm") return;
+    RangedWeaponStats stats{};
+    if (!w.isValid() || !statsForRangedWeapon(w.key, stats)) return;
+    cbt->magCapacity = stats.magCapacity;
+    cbt->fireRate = stats.fireRate;
+    cbt->reloadTime = stats.reloadTime;
     
     int magCapacity = cbt->magCapacity;
     if (w.quantity >= magCapacity) return; // 이미 만탄
@@ -308,20 +333,26 @@ void GameLogic::handleLootPickup(uint32_t ownerID, uint32_t lootNetID) {
     float dx = lxf->x - xf->x, dy = lxf->y - xf->y;
     if (dx*dx + dy*dy > 96.0f * 96.0f) return;
 
-    // Transfer all items from loot entity inventory into player inventory
+    // Transfer all items atomically. If the inventory cannot accept the full
+    // loot payload because of slot/weight limits, keep the loot entity intact.
     auto* linv = m_world.tryGet<InventoryComponent>(loot);
-    bool transferredAny = false;
     if (linv) {
+        InventoryComponent nextInv = *inv;
         for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
             if (!linv->slots[i].isValid()) continue;
-            if (inv->addItem(linv->slots[i])) {
-                linv->removeItem(i);
-                transferredAny = true;
+            if (!nextInv.addItem(linv->slots[i])) {
+                inv->recalculateGridStats();
+                DZ_LOG_WARN("[Logic] Loot %u pickup blocked for owner %u; slots=%d/%d weight=%.1f/%.1f",
+                            lootNetID, ownerID, inv->usedSlots, INVENTORY_GRID_SLOTS,
+                            inv->currentWeight, inv->maxCarryWeight);
+                return;
             }
         }
-    }
 
-    if (transferredAny) {
+        *inv = nextInv;
+        for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
+            if (linv->slots[i].isValid()) linv->removeItem(i);
+        }
         if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
             net->markDirty(DIRTY_INVENTORY);
         }

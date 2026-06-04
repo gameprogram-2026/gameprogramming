@@ -8,4 +8,7 @@ else
 fi
 set +a
 
-exec "$(dirname "$0")/build/bin/DeadZoneServer" "$@"
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+python3 "$ROOT_DIR/src/generate_map.py"
+
+exec "$ROOT_DIR/build/bin/DeadZoneServer" "$@"

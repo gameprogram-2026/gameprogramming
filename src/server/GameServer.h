@@ -48,8 +48,11 @@ private:
     void onUseItem(uint32_t peerIdx, const char* key);
     void onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam);
     void onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction = 0);
+    void onDoorRepairReq(uint32_t peerIdx, int16_t tileX, int16_t tileY);
     void onCraftRequest(uint32_t peerIdx, uint8_t recipeID);
     void onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID);
+    void onItemDropReq(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint16_t quantity);
+    void onDismantleReq(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx);
     void onSelectWeaponReq(uint32_t peerIdx, uint8_t slot);
     void onDoorToggleReq(uint32_t peerIdx, uint16_t doorID);
     void sendDoorState(uint32_t peerIdx, uint16_t doorID, bool open);
@@ -88,6 +91,7 @@ private:
     void spawnZombies();
     void spawnLootBoxes();
     void spawnNightWave();
+    void updateZombieDoorAttacks(float dt);
 
     // ── State ─────────────────────────────────────────────────────────────────
     World           m_world;

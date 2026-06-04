@@ -77,6 +77,7 @@ struct ZombieAIComponent {
     float       targetX     = 0.0f;   ///< Chase/investigate target world position
     float       targetY     = 0.0f;
     uint32_t    targetNetID = 0;       ///< Entity being chased (0 = sound source)
+    int16_t     targetDoorID = -1;     ///< Closed door blocking the chased player (-1 = none)
     float       attackTimer = 0.0f;
     bool        chainTriggered = false;///< Frenzy chain aggro already propagated
 };

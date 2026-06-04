@@ -54,12 +54,12 @@
       "damage": 60,
       "noiseRadius": 960,
       "noiseCategory": "Loud",
-      "magSize": 7,
+      "magSize": 9,
       "weight": 1.0,
       "melee": false,
       "ammoKey": "ammo_9mm",
       "special": "zombie_aggro_all",
-      "description": "발사 시 전 좀비 어그로. 장탄 7발"
+      "description": "발사 시 큰 소음으로 주변 좀비 어그로. 장탄 9발"
     },
     {
       "id": 5,
@@ -91,6 +91,22 @@
       "special": "fire_spread",
       "spawnRate": "very_rare",
       "description": "범위 화염. 판당 맵에 1~2개만 스폰"
+    },
+    {
+      "id": 7,
+      "key": "smg_9mm",
+      "name": "9mm 기관단총",
+      "category": "Weapon",
+      "grade": "rare",
+      "damage": 24,
+      "noiseRadius": 1280,
+      "noiseCategory": "Loud",
+      "magSize": 30,
+      "weight": 2.4,
+      "melee": false,
+      "ammoKey": "ammo_9mm",
+      "special": "full_auto",
+      "description": "9mm 탄을 빠르게 소모하는 연사 무기. 장탄 30발"
     },
     {
       "id": 10,
@@ -226,6 +242,18 @@
         {"key": "scrap_metal", "qty": 1},
         {"key": "oil",         "qty": 1}
       ]
+    },
+    {
+      "result": "smg_9mm",
+      "description": "9mm 기관단총 제작",
+      "result_qty": 30,
+      "requires_workbench": true,
+      "ingredients": [
+        {"key": "scrap_metal",     "qty": 5},
+        {"key": "electronic_part", "qty": 2},
+        {"key": "oil",             "qty": 1},
+        {"key": "ammo_9mm",        "qty": 30}
+      ]
     }
   ],
   "building_recipes": [
@@ -252,6 +280,63 @@
       "ingredients": [
         {"key": "plank", "qty": 2}
       ]
+    },
+    {
+      "result": "door",
+      "description": "문 수리 — 부서진 집 문을 다시 설치",
+      "ingredients": [
+        {"key": "plank",       "qty": 3},
+        {"key": "scrap_metal", "qty": 1}
+      ]
+    }
+  ],
+  "dismantle_recipes": [
+    {
+      "source": "scrap_pipe",
+      "results": [
+        {"key": "scrap_metal", "qty": 1}
+      ]
+    },
+    {
+      "source": "nail_bat",
+      "results": [
+        {"key": "plank",       "qty": 1},
+        {"key": "scrap_metal", "qty": 1}
+      ]
+    },
+    {
+      "source": "fire_axe",
+      "results": [
+        {"key": "scrap_metal", "qty": 2}
+      ]
+    },
+    {
+      "source": "pistol_9mm",
+      "results": [
+        {"key": "scrap_metal",     "qty": 2},
+        {"key": "electronic_part", "qty": 1}
+      ]
+    },
+    {
+      "source": "smg_9mm",
+      "results": [
+        {"key": "scrap_metal",     "qty": 3},
+        {"key": "electronic_part", "qty": 1}
+      ]
+    },
+    {
+      "source": "flamethrower",
+      "results": [
+        {"key": "scrap_metal",     "qty": 3},
+        {"key": "oil",             "qty": 2},
+        {"key": "electronic_part", "qty": 1}
+      ]
+    },
+    {
+      "source": "molotov",
+      "results": [
+        {"key": "oil", "qty": 1}
+      ]
     }
   ],
   "zone_loot": {
@@ -265,13 +350,13 @@
       "comment": "구역B 쇼핑몰 폐허 — 중간 밀도",
       "zombie_density": "medium",
       "zombie_types": ["shambler", "runner"],
-      "loot_pool": ["nail_bat", "bandage", "medkit", "ammo_9mm", "food_can", "plank", "scrap_metal"]
+      "loot_pool": ["nail_bat", "bandage", "medkit", "ammo_9mm", "food_can", "plank", "scrap_metal", "smg_9mm"]
     },
     "C_industrial": {
       "comment": "구역C 산업단지 — 높은 밀도, 포탑 재료 주산지",
       "zombie_density": "high",
       "zombie_types": ["shambler", "runner", "brute"],
-      "loot_pool": ["fire_axe", "electronic_part", "oil", "scrap_metal", "molotov", "ammo_9mm", "pistol_9mm"]
+      "loot_pool": ["fire_axe", "electronic_part", "oil", "scrap_metal", "molotov", "ammo_9mm", "pistol_9mm", "smg_9mm"]
     }
   }
 }

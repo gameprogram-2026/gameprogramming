@@ -48,6 +48,7 @@ bool TileMap::loadFromJSON(const std::string& path) {
     m_h = cJSON_GetObjectItem(map, "height") ? cJSON_GetObjectItem(map, "height")->valueint : 80;
     m_tiles.assign(static_cast<size_t>(m_w * m_h), Tile{});
     m_extractionZones.clear();
+    m_districts.clear();
     m_buildings.clear();
     m_doors.clear();
     m_playerSpawns.clear();
@@ -81,6 +82,26 @@ bool TileMap::loadFromJSON(const std::string& path) {
             ez.w = cJSON_GetObjectItem(item, "w") ? cJSON_GetObjectItem(item, "w")->valueint : 1;
             ez.h = cJSON_GetObjectItem(item, "h") ? cJSON_GetObjectItem(item, "h")->valueint : 1;
             m_extractionZones.push_back(ez);
+        }
+    }
+
+    cJSON* districts = cJSON_GetObjectItem(map, "districts");
+    if (districts && cJSON_IsArray(districts)) {
+        int count = cJSON_GetArraySize(districts);
+        for (int i = 0; i < count; ++i) {
+            cJSON* item = cJSON_GetArrayItem(districts, i);
+            DistrictDef d;
+            d.id = cJSON_GetObjectItem(item, "id") ? cJSON_GetObjectItem(item, "id")->valueint : i;
+            d.x = cJSON_GetObjectItem(item, "x") ? cJSON_GetObjectItem(item, "x")->valueint : 0;
+            d.y = cJSON_GetObjectItem(item, "y") ? cJSON_GetObjectItem(item, "y")->valueint : 0;
+            d.w = cJSON_GetObjectItem(item, "w") ? cJSON_GetObjectItem(item, "w")->valueint : 0;
+            d.h = cJSON_GetObjectItem(item, "h") ? cJSON_GetObjectItem(item, "h")->valueint : 0;
+            d.theme = cJSON_GetObjectItem(item, "theme") ? cJSON_GetObjectItem(item, "theme")->valueint : 0;
+            cJSON* key = cJSON_GetObjectItem(item, "key");
+            cJSON* label = cJSON_GetObjectItem(item, "label");
+            d.key = (key && cJSON_IsString(key)) ? key->valuestring : "";
+            d.label = (label && cJSON_IsString(label)) ? label->valuestring : "";
+            m_districts.push_back(d);
         }
     }
 
@@ -258,6 +279,9 @@ void TileMap::initializeBuildingDoors(bool openByDefault) {
         door.tx = tx;
         door.ty = ty;
         door.open = false;
+        door.broken = false;
+        door.maxHp = 100.0f;
+        door.hp = door.maxHp;
         m_doors.push_back(door);
         setDoorOpen(door.id, openByDefault);
     };
@@ -278,6 +302,7 @@ bool TileMap::setDoorOpen(uint16_t doorID, bool open) {
     for (auto& door : m_doors) {
         if (door.id != doorID) continue;
         if (!inBounds(door.tx, door.ty)) return false;
+        if (door.broken && !open) return false;
 
         door.open = open;
         Tile& tile = at(door.tx, door.ty);
@@ -295,9 +320,59 @@ bool TileMap::setDoorOpen(uint16_t doorID, bool open) {
 
 bool TileMap::toggleDoor(uint16_t doorID) {
     for (const auto& door : m_doors) {
+        if (door.id == doorID && door.broken) return false;
         if (door.id == doorID) return setDoorOpen(doorID, !door.open);
     }
     return false;
+}
+
+bool TileMap::setDoorBroken(uint16_t doorID, bool broken) {
+    for (auto& door : m_doors) {
+        if (door.id != doorID) continue;
+        if (!inBounds(door.tx, door.ty)) return false;
+
+        door.broken = broken;
+        if (broken) {
+            door.hp = 0.0f;
+            door.open = true;
+            Tile& tile = at(door.tx, door.ty);
+            tile.type = TILE_WOOD_FLOOR;
+            tile.flags &= ~TILE_SOLID;
+        } else {
+            door.hp = door.maxHp;
+            door.open = false;
+            Tile& tile = at(door.tx, door.ty);
+            tile.type = TILE_WALL;
+            tile.flags |= TILE_SOLID;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool TileMap::damageDoor(uint16_t doorID, float damage) {
+    if (damage <= 0.0f) return false;
+    for (auto& door : m_doors) {
+        if (door.id != doorID || door.open || door.broken) continue;
+        door.hp -= damage;
+        if (door.hp <= 0.0f) {
+            return setDoorBroken(doorID, true);
+        }
+        return false;
+    }
+    return false;
+}
+
+bool TileMap::repairDoor(uint16_t doorID) {
+    return setDoorBroken(doorID, false);
+}
+
+int TileMap::findDoorAt(int tx, int ty) const {
+    for (const auto& door : m_doors) {
+        if (door.tx == tx && door.ty == ty)
+            return static_cast<int>(door.id);
+    }
+    return -1;
 }
 
 int TileMap::findNearestDoor(float wx, float wy, float maxDist) const {

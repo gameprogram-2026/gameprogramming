@@ -109,6 +109,8 @@ public:
     void sendBuildPlace(int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction = 0);
     void sendCraftRequest(uint8_t recipeID);
     void sendLootPickup(uint32_t lootNetID);
+    void sendItemDrop(uint8_t srcType, uint8_t srcIdx, uint16_t quantity);
+    void sendDismantleItem(uint8_t srcType, uint8_t srcIdx);
 
     void sendJoinMatch();
     void sendStashTransfer(uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx);
