@@ -706,7 +706,10 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
     int maxTX = std::min(map.width()  - 1, TileMap::worldToTile(cam.x + hw) + 1);
     int maxTY = std::min(map.height() - 1, TileMap::worldToTile(cam.y + hh) + 1);
 
-    // 타일 정렬: 첫 번째 타일 기준으로 정수 누적 → 1px 갭/오버랩 방지
+    // SDL 뷰포트 클리핑 — 타일이 화면 밖으로 넘치지 않음 (왼쪽·아래쪽 포함)
+    SDL_Rect screenClip = {0, 0, m_screenW, m_screenH};
+    SDL_RenderSetClipRect(m_renderer, &screenClip);
+
     int baseX = static_cast<int>(std::round((minTX * TILE_SIZE - cam.x) * cam.zoom + m_screenW * 0.5f));
     int baseY = static_cast<int>(std::round((minTY * TILE_SIZE - cam.y) * cam.zoom + m_screenH * 0.5f));
 
@@ -747,6 +750,10 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
             dst.y = baseY + (ty - minTY) * tsz;
             dst.w = tsz + 1;
             dst.h = tsz + 1;
+            // 경계 클리핑 — 아래쪽/오른쪽 넘침 방지
+            if (dst.x + dst.w > m_screenW) dst.w = m_screenW - dst.x;
+            if (dst.y + dst.h > m_screenH) dst.h = m_screenH - dst.y;
+            if (dst.w <= 0 || dst.h <= 0) continue;
 
             SDL_Texture* tex = texKey ? m_texCache.get(texKey) : nullptr;
             if (tex) {
@@ -793,6 +800,7 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
         }
     }
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+    SDL_RenderSetClipRect(m_renderer, nullptr); // 타일 클리핑 해제
 
     drawBuildings(map, cam, localX, localY);
 }
@@ -1754,11 +1762,21 @@ static void drawRemoteEntity(Renderer* rnd, SDL_Renderer* r, TTF_Font* /*fSm*/,
         int zFrame = zMoving ? (static_cast<int>(SDL_GetTicks()/125) % 3 + 1) : 0;
         const char* zType = (zt==ZT_BRUTE) ? "brute" : (zt==ZT_RUNNER) ? "runner" : "shambler";
         bool isDead2 = (rem.snap[1].statusFlags & STATUS_DEAD) != 0;
-        std::string sprKey = isDead2
-            ? (std::string("char_")+zType+"_D_3")
-            : (std::string("char_")+zType+"_"+dirs[zDir]+"_"+std::to_string(zFrame));
+        std::string sprKey;
+        uint8_t sprAlpha = 255;
+        if (isDead2) {
+            // 사망 애니: 300ms/프레임으로 0→1→2→3 천천히, 이후 frame3 고정
+            // entityID로 스태거 → 모든 좀비가 동시에 같은 프레임 아님
+            int deathFrame = std::min(3, static_cast<int>((SDL_GetTicks()/300 + rem.entityID * 7) % 40));
+            sprKey = std::string("char_")+zType+"_D_"+std::to_string(deathFrame);
+            // 시간이 지날수록 서서히 어두워짐 (시체 느낌)
+            uint32_t age = (SDL_GetTicks() / 300 + rem.entityID * 7) % 40;
+            sprAlpha = age >= 4 ? 160 : static_cast<uint8_t>(255 - age * 24);
+        } else {
+            sprKey = std::string("char_")+zType+"_"+dirs[zDir]+"_"+std::to_string(zFrame);
+        }
         SDL_Texture* zTex = rnd->textures().get(sprKey);
-        bool usedSprite = drawSprite(zTex, sx, sy, sz);
+        bool usedSprite = drawSprite(zTex, sx, sy, sz, sprAlpha);
         
         bool isDead = (rem.snap[1].statusFlags & STATUS_DEAD) != 0;
         if (isDead) {
