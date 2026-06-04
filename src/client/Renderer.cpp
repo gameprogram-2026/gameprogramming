@@ -1223,14 +1223,11 @@ void Renderer::drawLootBox(const LootBoxView& box, const Camera& cam) {
         if (box.buildingType == 0) { // Barricade
             SDL_Texture* tex = m_texCache.get("prop_barricade");
             if (tex) SDL_RenderCopy(m_renderer, tex, nullptr, &body);
-        } else if (box.buildingType == 1) { // Turret
-            SDL_Texture* baseTex = m_texCache.get("bld_turret_base");
-            SDL_Texture* headTex = m_texCache.get("bld_turret_head");
-            if (baseTex) SDL_RenderCopy(m_renderer, baseTex, nullptr, &body);
-            if (headTex) {
-                // 실제 설치 방향으로 회전 (0=N, 1=E, 2=S, 3=W → 0°, 90°, 180°, 270°)
+        } else if (box.buildingType == 1) { // Turret — props 시트의 단일 텍스처
+            SDL_Texture* turretTex = m_texCache.get("bld_turret");
+            if (turretTex) {
                 double angle = static_cast<double>(box.turretDir) * 90.0;
-                SDL_RenderCopyEx(m_renderer, headTex, nullptr, &body, angle, nullptr, SDL_FLIP_NONE);
+                SDL_RenderCopyEx(m_renderer, turretTex, nullptr, &body, angle, nullptr, SDL_FLIP_NONE);
             }
         } else if (box.buildingType == 2) { // Workbench
             SDL_Texture* tex = m_texCache.get("bld_workbench");
