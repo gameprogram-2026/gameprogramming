@@ -60,24 +60,28 @@ void GameLogic::processInput(uint32_t ownerID, const InputPacket& pkt) {
     }
 }
 
-void GameLogic::handleBuildRequest(uint32_t ownerID,
+bool GameLogic::handleBuildRequest(uint32_t ownerID,
                                     int tileX, int tileY,
-                                    BuildingType type) {
+                                    BuildingType type,
+                                    uint8_t direction) {
     Entity e = findOwnedEntity(ownerID);
-    if (!e.isValid()) return;
+    if (!e.isValid()) return false;
 
     auto* hp = m_world.tryGet<HealthComponent>(e);
-    if (!hp || !hp->isAlive) return;
+    if (!hp || !hp->isAlive) return false;
 
     Entity building = m_build.tryBuild(m_world, m_map,
                                         static_cast<uint32_t>(hp->team),
-                                        e, tileX, tileY, type);
+                                        e, tileX, tileY, type, direction);
     if (!building.isValid()) {
         DZ_LOG_DEBUG("[Logic] Build failed for owner %u at tile (%d,%d)",
                      ownerID, tileX, tileY);
-    } else if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
+        return false;
+    }
+    if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
         net->markDirty(DIRTY_INVENTORY);
     }
+    return true;
 }
 
 void GameLogic::handleFireThrow(uint32_t ownerID,
@@ -347,18 +351,18 @@ void GameLogic::handleLootPickup(uint32_t ownerID, uint32_t lootNetID) {
 // ─────────────────────────────────────────────────────────────────────────────
 // handleCraftRequest — ItemData.h 레시피 테이블 기반 범용 조합 처리
 // ─────────────────────────────────────────────────────────────────────────────
-void GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
+bool GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
     Entity e = findOwnedEntity(ownerID);
-    if (!e.isValid()) return;
+    if (!e.isValid()) return false;
 
     auto* xf  = m_world.tryGet<TransformComponent>(e);
     auto* inv = m_world.tryGet<InventoryComponent>(e);
-    if (!xf || !inv) return;
+    if (!xf || !inv) return false;
 
     // recipeID 유효성 검사
     if (recipeID >= CRAFT_RECIPE_COUNT) {
         DZ_LOG_WARN("[Craft] Invalid recipeID %u from owner %u", recipeID, ownerID);
-        return;
+        return false;
     }
     const CraftingRecipe& rec = CRAFT_RECIPES[recipeID];
 
@@ -377,7 +381,7 @@ void GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
         }
         if (!nearWorkbench) {
             DZ_LOG_DEBUG("[Craft] %u: recipe %u requires workbench nearby", ownerID, recipeID);
-            return;
+            return false;
         }
     }
 
@@ -391,14 +395,14 @@ void GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
         if (have < rec.ingredients[ii].qty) {
             DZ_LOG_DEBUG("[Craft] %u: insufficient %s (%d/%d)",
                          ownerID, rec.ingredients[ii].key, have, rec.ingredients[ii].qty);
-            return;
+            return false;
         }
     }
 
     // 인벤토리 여유 공간 확인
     if (inv->isFull()) {
         DZ_LOG_DEBUG("[Craft] %u: inventory full", ownerID);
-        return;
+        return false;
     }
 
     // 재료 소비
@@ -428,6 +432,7 @@ void GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
 
     DZ_LOG_INFO("[Craft] owner=%u recipe=%u → %s x%d",
                 ownerID, recipeID, rec.resultKey, rec.resultQty);
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

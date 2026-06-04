@@ -367,6 +367,20 @@ void NetworkClient::update(float dt) {
                     }
                 } else if (ptype == PacketType::S2C_SirenEvent) {
                     m_hasSirenEvent = true;
+                } else if (ptype == PacketType::S2C_BuildAck) {
+                    if (ev.packet->dataLength >= sizeof(BuildAckPacket)) {
+                        BuildAckPacket pkt{};
+                        std::memcpy(&pkt, ev.packet->data, sizeof(pkt));
+                        m_buildSuccess = pkt.success != 0;
+                        m_buildMsg     = pkt.message;
+                    }
+                } else if (ptype == PacketType::S2C_CraftAck) {
+                    if (ev.packet->dataLength >= sizeof(CraftAckPacket)) {
+                        CraftAckPacket pkt{};
+                        std::memcpy(&pkt, ev.packet->data, sizeof(pkt));
+                        m_buildSuccess = pkt.success != 0;
+                        m_buildMsg     = pkt.message; // 조합 결과도 같은 알림 채널 재사용
+                    }
                 }
             }
             enet_packet_destroy(ev.packet);
@@ -636,13 +650,14 @@ void NetworkClient::sendAlliancePropose(uint8_t toTeam) {
 // ─────────────────────────────────────────────────────────────────────────────
 // sendBuildPlace — 건설 배치 요청 (신뢰 채널)
 // ─────────────────────────────────────────────────────────────────────────────
-void NetworkClient::sendBuildPlace(int16_t tileX, int16_t tileY, uint8_t buildingType) {
+void NetworkClient::sendBuildPlace(int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction) {
     if (!m_peer) return;
     BuildPlacePacket pkt{};
     pkt.packetType   = static_cast<uint8_t>(PacketType::C2S_BuildPlace);
     pkt.tileX        = tileX;
     pkt.tileY        = tileY;
     pkt.buildingType = buildingType;
+    pkt.direction    = direction;
     ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
     enet_peer_send(m_peer, CHAN_RELIABLE, ep);
 }

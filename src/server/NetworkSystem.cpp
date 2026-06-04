@@ -146,11 +146,17 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
         if (rec.recordType == REC_ZOMBIE) {
             auto* ai = world.tryGet<ZombieAIComponent>(e);
             if (ai) {
-                rec.statusFlags |= (static_cast<uint8_t>(ai->type) & 0x03u) << 6;
+                // bits5-6에 좀비 타입 저장 (bit6=STATUS_BUILDING, bit7=STATUS_DEAD 충돌 회피)
+                rec.statusFlags |= (static_cast<uint8_t>(ai->type) & 0x03u) << 5;
             }
         } else if (rec.recordType == REC_BUILDING) {
             if (bld) {
-                rec.statusFlags = static_cast<uint8_t>(bld->type);
+                rec.statusFlags = static_cast<uint8_t>(bld->type) & 0x0F;
+                if (bld->isTurret()) {
+                    // bits4-5: 포탑 방향 (0=N 1=E 2=S 3=W)
+                    uint8_t dir = (static_cast<uint8_t>(bld->turretAngle / 90.0f + 0.5f)) & 0x03;
+                    rec.statusFlags |= (dir << 4);
+                }
             }
         }
 
@@ -289,7 +295,7 @@ void NetworkSystem::handlePacket(uint32_t peerIdx,
         if (len < sizeof(BuildPlacePacket)) return;
         BuildPlacePacket pkt{};
         std::memcpy(&pkt, data, sizeof(pkt));
-        if (m_onBuild) m_onBuild(peerIdx, pkt.tileX, pkt.tileY, pkt.buildingType);
+        if (m_onBuild) m_onBuild(peerIdx, pkt.tileX, pkt.tileY, pkt.buildingType, pkt.direction);
         break;
     }
     case PacketType::C2S_CraftRequest: {

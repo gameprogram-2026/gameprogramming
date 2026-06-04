@@ -242,6 +242,25 @@ bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
         // m_onDamage는 applyDamage 내부에서 이미 호출됨
         hitAny = true;
     }
+
+    // 근접 무기 내구도 감소 (quantity = 남은 내구도)
+    if (hitAny) {
+        auto* ainv = world.tryGet<InventoryComponent>(attacker);
+        if (ainv) {
+            Item& w = ainv->equipped[static_cast<int>(ainv->activeWeaponSlot)];
+            if (w.isValid() && w.category == ItemCategory::Weapon &&
+                w.key != "pistol_9mm" && w.key != "flamethrower") {
+                --w.quantity;
+                if (w.quantity <= 0) {
+                    DZ_LOG_INFO("[Combat] Weapon '%s' broke!", w.key.c_str());
+                    w = Item{};
+                }
+                auto* anet = world.tryGet<NetworkComponent>(attacker);
+                if (anet) anet->markDirty(DIRTY_INVENTORY);
+            }
+        }
+    }
+
     return hitAny;
 }
 

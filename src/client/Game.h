@@ -100,8 +100,12 @@ private:
 
     // 인벤토리 & UI 상태
     ClientInventory m_inventory;
-    bool            m_showInventory = false;
-    bool            m_showCrafting  = false;
+    bool            m_showInventory   = false;
+    bool            m_showCrafting    = false;
+    int             m_craftScroll     = 0;   // 제작 UI 스크롤 오프셋 (px)
+    int             m_turretDir      = 0;   // 포탑 방향 (0=북 1=동 2=남 3=서)
+    int             m_charDir        = 0;   // 캐릭터 이동 방향 (0=S 1=N 2=E 3=W)
+    bool            m_charMoving     = false;
 
     // 드래그 앤 드롭
     DragState m_drag;

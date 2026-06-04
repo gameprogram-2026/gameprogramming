@@ -106,7 +106,7 @@ public:
     // ── 새 send 메서드 ──────────────────────────────────────────────────────────
     void sendUseItem(const char* key);
     void sendAlliancePropose(uint8_t toTeam);
-    void sendBuildPlace(int16_t tileX, int16_t tileY, uint8_t buildingType);
+    void sendBuildPlace(int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction = 0);
     void sendCraftRequest(uint8_t recipeID);
     void sendLootPickup(uint32_t lootNetID);
 
@@ -151,6 +151,11 @@ public:
         m_hasSirenEvent = false;
         return res;
     }
+    bool        hasBuildMsg()     const noexcept { return !m_buildMsg.empty(); }
+    std::string consumeBuildMsg() noexcept {
+        std::string s = m_buildMsg; m_buildMsg.clear(); return s;
+    }
+    bool        lastBuildSuccess() const noexcept { return m_buildSuccess; }
     float    extractionProgress() const noexcept { return m_extractProg; }
     bool     consumeExtractionEvent() noexcept {
         bool res = m_hasExtractionEvent;
@@ -220,6 +225,9 @@ private:
     uint8_t     m_allianceBits = 0;
     bool        m_hasSirenEvent = false;
     bool        m_hasExtractionEvent = false;
+    bool        m_buildSuccess  = false;
+    std::string m_buildMsg;
+    uint16_t    m_lastAckedSeq = 0;
     uint16_t    m_gameTimeSec  = 0;
 
     int      m_tickCount    = 0;

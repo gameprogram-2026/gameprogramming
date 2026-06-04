@@ -225,6 +225,21 @@ struct BuildPlacePacket {
     int16_t  tileX        = 0;
     int16_t  tileY        = 0;
     uint8_t  buildingType = 0;  // BuildingType enum
+    uint8_t  direction    = 0;  // 0=북 1=동 2=남 3=서 (포탑 전용)
+};
+
+// 서버 → 클라이언트: 조합 결과
+struct CraftAckPacket {
+    uint8_t packetType = static_cast<uint8_t>(PacketType::S2C_CraftAck);
+    uint8_t success    = 0;
+    char    message[64] = {}; // 한국어 UTF-8 최대 64바이트
+};
+
+// 서버 → 클라이언트: 건설 결과 (성공/실패 이유)
+struct BuildAckPacket {
+    uint8_t packetType = static_cast<uint8_t>(PacketType::S2C_BuildAck);
+    uint8_t success    = 0;
+    char    message[64] = {}; // 한국어 UTF-8 최대 64바이트
 };
 
 // 서버 → 클라이언트: 팀 상태 브로드캐스트

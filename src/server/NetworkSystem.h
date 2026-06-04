@@ -37,7 +37,7 @@ public:
     using DisconHandler  = std::function<void(uint32_t peerIdx)>;
     using UseItemCB      = std::function<void(uint32_t peerIdx, const char* key)>;
     using AllianceCB     = std::function<void(uint32_t peerIdx, uint8_t toTeam)>;
-    using BuildCB        = std::function<void(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType)>;
+    using BuildCB        = std::function<void(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction)>;
     using CraftCB        = std::function<void(uint32_t peerIdx, uint8_t recipeID)>;
     using LootPickupCB   = std::function<void(uint32_t peerIdx, uint32_t lootNetID)>;
     using AuthHandler    = std::function<void(uint32_t peerIdx, const char* user, const char* pass, bool isRegister)>;

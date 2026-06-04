@@ -3,6 +3,7 @@
 #include "shared/ecs/components/HealthComponent.h"
 #include "shared/ecs/components/NetworkComponent.h"
 #include "shared/ecs/components/CombatComponent.h"
+#include "shared/ecs/components/BuildingComponent.h"
 #include "shared/TileMap.h"
 #include "shared/util/Logger.h"
 #include <algorithm>
@@ -352,6 +353,32 @@ void ZombieAISystem::doAttack(World& world, Entity zombie,
 
         ai.attackTimer = atkRate;
         break;
+    }
+
+    // 플레이어를 못 찾았으면 인접한 건물(바리케이드/포탑) 공격
+    if (ai.attackTimer <= 0.0f) {
+        float atkR = (ai.type == ZombieType::Brute) ? BRUTE_ATTACK_RADIUS : ZOMBIE_ATTACK_RADIUS;
+        float dmg  = (ai.type == ZombieType::Brute) ? BRUTE_ATTACK_DAMAGE * 0.6f
+                                                     : ZOMBIE_ATTACK_DAMAGE * 0.5f;
+        for (EntityID bid : world.alive()) {
+            Entity be{bid};
+            auto* bld = world.tryGet<BuildingComponent>(be);
+            if (!bld || bld->isDestroyed) continue;
+            auto* bxf = world.tryGet<TransformComponent>(be);
+            auto* bhp = world.tryGet<HealthComponent>(be);
+            if (!bxf || !bhp || !bhp->isAlive) continue;
+            float dx2 = bxf->x - xf->x, dy2 = bxf->y - xf->y;
+            if (dx2*dx2 + dy2*dy2 > atkR * atkR) continue;
+            if (m_combat) {
+                m_combat->applyDamage(world, be, zombie, dmg, DamageType::Melee);
+            } else {
+                bhp->applyDamage(dmg, DamageType::Melee);
+                auto* bnet = world.tryGet<NetworkComponent>(be);
+                if (bnet) bnet->markDirty(DIRTY_HEALTH);
+            }
+            ai.attackTimer = ZOMBIE_ATTACK_RATE;
+            break;
+        }
     }
 }
 

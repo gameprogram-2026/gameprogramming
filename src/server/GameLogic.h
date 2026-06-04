@@ -26,8 +26,9 @@ public:
     /// Main dispatcher — called per-tick for each connected client's input
     void processInput(uint32_t ownerID, const InputPacket& pkt);
 
-    void handleBuildRequest(uint32_t ownerID,
-                            int tileX, int tileY, BuildingType type);
+    bool handleBuildRequest(uint32_t ownerID,
+                            int tileX, int tileY, BuildingType type,
+                            uint8_t direction = 0);
     void handleFireThrow(uint32_t ownerID,
                          float originX, float originY);
     void handleFlamethrowerBurst(uint32_t ownerID, float aimAngle);
@@ -35,7 +36,7 @@ public:
     void handleRangedFire(uint32_t ownerID, float aimAngle);
     void handleReload(uint32_t ownerID);
     void handleUseItem(uint32_t ownerID, const char* key);
-    void handleCraftRequest(uint32_t ownerID, uint8_t recipeID);
+    bool handleCraftRequest(uint32_t ownerID, uint8_t recipeID);
     void handleAlliancePropose(uint8_t fromTeam, uint8_t toTeam);
     void handleAllianceBreak(uint8_t fromTeam, uint8_t toTeam);
     void handleLootPickup(uint32_t ownerID, uint32_t lootNetID);

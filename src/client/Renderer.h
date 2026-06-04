@@ -108,9 +108,10 @@ struct ClientInventory {
 struct LootBoxView {
     float wx, wy;
     bool  looted     = false;
-    bool  nearPlayer = false; // F키 힌트 표시 여부
+    bool  nearPlayer = false;
     bool  isBuilding = false;
     uint8_t buildingType = 0;
+    uint8_t turretDir    = 0; ///< 0=N 1=E 2=S 3=W (포탑 전용)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,7 +164,8 @@ public:
                            float localX, float localY, float aimAngle,
                            float hpPct, bool bleeding, int teamID,
                            const std::string& wName, const std::string& wGrade,
-                           float attackTimer, float attackAngle);
+                           float attackTimer, float attackAngle,
+                           int charDir = 0, bool charMoving = false);
 
     // 하위 호환 — 내부에서 drawWorldEntities 호출
     void drawLocalPlayer(float wx, float wy, float angle, float hpPct,
@@ -171,7 +173,9 @@ public:
                          const std::string& weaponName  = "",
                          const std::string& weaponGrade = "normal",
                          float attackTimer = 0.0f,
-                         float attackAngle = 0.0f);
+                         float attackAngle = 0.0f,
+                         int   charDir     = 0,
+                         bool  charMoving  = false);
     void drawRemotes(const NetworkClient& net, const Camera& cam);
     void drawHUD(float hp, float maxHp, float stamina, float maxStamina, bool bleeding,
                  float extractProgress, int teamID, float extractCountdown, 
@@ -184,7 +188,7 @@ public:
                  bool isReloading = false);          ///< 장전 중 여부
 
     void drawBuildModeOverlay(bool active, int buildType, int mouseX, int mouseY,
-                              const Camera& cam);
+                              const Camera& cam, int turretDir = 0);
     void drawBuildRecipePanel(const ClientInventory& inv, int buildType);
     void drawExtractionZones(const Camera& cam,
                              const std::vector<std::pair<float,float>>& zones,
@@ -198,7 +202,7 @@ public:
                        const InventoryItem* dragItem = nullptr, bool showStash = false);
 
     /// 제작대 UI
-    void drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY, int& outClickedRecipe);
+    void drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY, int& outClickedRecipe, int scrollOffset = 0);
 
     /// 화면 하단 핫바 (무기 슬롯 1-2, 소모품 슬롯 3-5)
     /// consumableIdx[3]: 그리드 슬롯 인덱스 (-1이면 빈 슬롯)

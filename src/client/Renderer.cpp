@@ -68,6 +68,8 @@ bool Renderer::init(SDL_Window* window, int w, int h) {
 
     m_texCache.init(m_renderer);
     m_texCache.loadItemIcons();
+    m_texCache.loadWorldSprites();
+    m_texCache.loadCharacterSprites();
     m_fonts.init();
     return true;
 }
@@ -693,27 +695,60 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
     int maxTX = std::min(map.width()  - 1, TileMap::worldToTile(cam.x + hw) + 1);
     int maxTY = std::min(map.height() - 1, TileMap::worldToTile(cam.y + hh) + 1);
 
+    // 타일 정렬: 첫 번째 타일 기준으로 정수 누적 → 1px 갭/오버랩 방지
+    int baseX = static_cast<int>(std::round((minTX * TILE_SIZE - cam.x) * cam.zoom + m_screenW * 0.5f));
+    int baseY = static_cast<int>(std::round((minTY * TILE_SIZE - cam.y) * cam.zoom + m_screenH * 0.5f));
+
+    // 구역 경계: 200×200 맵을 4분할 (NW=주거, NE=공업, SW=군사, SE=상업)
+    const int HALF = map.width() / 2; // 100
+
     for (int ty = minTY; ty <= maxTY; ++ty) {
         for (int tx = minTX; tx <= maxTX; ++tx) {
             const Tile& tile = map.at(tx, ty);
-            SDL_Color col = {38,48,28,255};
+
+            // 구역 판별 (0=NW주거 1=NE공업 2=SW군사 3=SE상업)
+            int zone = (tx >= HALF ? 1 : 0) + (ty >= HALF ? 2 : 0);
+
+            const char* texKey = nullptr;
             switch (tile.type) {
-                case TILE_GRASS:      col = {40,52,28,255}; break;
-                case TILE_ROAD:       col = {65,65,70,255}; break;
-                case TILE_WALL:       col = {88,88,98,255}; break;
-                case TILE_DEBRIS:     col = {75,65,48,255}; break;
-                case TILE_WOOD_FLOOR: col = {100,80,52,255}; break;
-                case TILE_ASH:        col = {48,44,42,255}; break;
+                case TILE_GRASS: {
+                    // 구역마다 단일 잔디 텍스처 — 무작위 혼합 없음
+                    static const char* zoneGrass[] = {
+                        "tile_grass_1",   // NW 주거: 밝은 초록
+                        "tile_grass_3",   // NE 공업: 말라가는 잔디
+                        "tile_grass_3",   // SW 군사: 메마른 올리브
+                        "tile_concrete",  // SE 상업: 콘크리트
+                    };
+                    texKey = zoneGrass[zone];
+                    break;
+                }
+                case TILE_ROAD:       texKey = "tile_asphalt";     break;
+                case TILE_WALL:       texKey = "tile_wall_brick";   break;
+                case TILE_DEBRIS:     texKey = "tile_debris";       break;
+                case TILE_WOOD_FLOOR: texKey = "tile_floor_wood_h"; break;
+                case TILE_ASH:        texKey = "tile_ash";          break;
+                default:              texKey = "tile_dirt";         break;
             }
-            SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
+
+            // 타일 rect: base + 정수 누적 (float 오차 없음), w/h +1 로 틈새 방지
             SDL_Rect dst;
-            dst.x = static_cast<int>((tx*TILE_SIZE - cam.x)*cam.zoom + m_screenW*0.5f);
-            dst.y = static_cast<int>((ty*TILE_SIZE - cam.y)*cam.zoom + m_screenH*0.5f);
-            dst.w = tsz; dst.h = tsz;
-            SDL_RenderFillRect(m_renderer, &dst);
-            if (tile.type == TILE_ROAD) {
-                SDL_SetRenderDrawColor(m_renderer, 80, 80, 85, 255);
-                SDL_RenderDrawRect(m_renderer, &dst);
+            dst.x = baseX + (tx - minTX) * tsz;
+            dst.y = baseY + (ty - minTY) * tsz;
+            dst.w = tsz + 1;
+            dst.h = tsz + 1;
+
+            SDL_Texture* tex = texKey ? m_texCache.get(texKey) : nullptr;
+            if (tex) {
+                SDL_RenderCopy(m_renderer, tex, nullptr, &dst); // flip 없음 → 경계 일치
+            } else {
+                SDL_Color fc = {38,48,28,255};
+                switch (tile.type) {
+                    case TILE_GRASS: fc = (zone==0)?SDL_Color{40,55,28,255}:(zone==3)?SDL_Color{75,75,70,255}:SDL_Color{50,52,30,255}; break;
+                    case TILE_ROAD:  fc = {65,65,70,255}; break;
+                    default:         fc = {58,48,35,255}; break;
+                }
+                SDL_SetRenderDrawColor(m_renderer, fc.r, fc.g, fc.b, fc.a);
+                SDL_RenderFillRect(m_renderer, &dst);
             }
         }
     }
@@ -758,22 +793,29 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
         
         SDL_Color floorCol, wallCol, roofCol;
         bool hasRoom = false;
-        
-        // Themes: 0=Residential, 1=Commercial, 2=Industrial, 3=Military
+        // Themes: 0=주거(Residential)  1=상업(Commercial)  2=공업(Industrial)  3=군사(Military)
         switch(b.theme) {
-            case 0:
-                floorCol = {115,90,62,255}; wallCol = {200,190,168,255}; roofCol = {180,60,50,255};
-                hasRoom = true;
+            case 0: // 주거 — 벽돌/원목 느낌
+                floorCol = {108,84,52,255};  // 원목 바닥
+                wallCol  = {215,198,168,255}; // 크림색 벽
+                roofCol  = {188,62,44,255};   // 기와 적갈색
+                hasRoom  = true;
                 break;
-            case 1:
-                floorCol = {145,138,128,255}; wallCol = {215,210,198,255}; roofCol = {100,120,180,255};
+            case 1: // 상업 — 현대식 유리/콘크리트
+                floorCol = {158,152,148,255}; // 밝은 타일
+                wallCol  = {225,222,215,255}; // 흰 콘크리트
+                roofCol  = {88,108,165,255};  // 강철 청회색
                 break;
-            case 2:
-                floorCol = {88,83,76,255}; wallCol = {138,130,118,255}; roofCol = {80,90,90,255};
+            case 2: // 공업 — 금속/암회색
+                floorCol = {70,70,65,255};    // 콘크리트/철판
+                wallCol  = {122,115,105,255}; // 산업용 회색
+                roofCol  = {72,80,76,255};    // 어두운 금속
                 break;
-            case 3:
-                floorCol = {60,70,50,255}; wallCol = {90,100,80,255}; roofCol = {50,60,40,255};
-                hasRoom = true;
+            case 3: // 군사 — 콘크리트 벙커
+                floorCol = {52,62,42,255};    // 짙은 올리브
+                wallCol  = {82,94,68,255};    // 군복색
+                roofCol  = {45,55,35,255};    // 위장 다크그린
+                hasRoom  = true;
                 break;
             default:
                 floorCol = {100,100,100,255}; wallCol = {150,150,150,255}; roofCol = {120,120,120,255};
@@ -804,12 +846,38 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
             if (interiorFloor.w > 0 && interiorFloor.h > 0)
                 SDL_RenderFillRect(m_renderer, &interiorFloor);
                 
-            // 바닥 타일 그리드
-            SDL_SetRenderDrawColor(m_renderer, 0,0,0, 18);
-            for (int gy = sy1+WALL_T; gy <= sy2-WALL_T; gy += tsz)
-                SDL_RenderDrawLine(m_renderer, sx1+WALL_T, gy, sx2-WALL_T, gy);
-            for (int gx = sx1+WALL_T; gx <= sx2-WALL_T; gx += tsz)
-                SDL_RenderDrawLine(m_renderer, gx, sy1+WALL_T, gx, sy2-WALL_T);
+            // 테마별 바닥 패턴
+            if (b.theme == 0) {
+                // 주거: 원목 마룻바닥 (수평선)
+                SDL_SetRenderDrawColor(m_renderer, 80,55,28, 32);
+                int plankH = std::max(2, tsz/3);
+                for (int gy = sy1+WALL_T; gy <= sy2-WALL_T; gy += plankH)
+                    SDL_RenderDrawLine(m_renderer, sx1+WALL_T, gy, sx2-WALL_T, gy);
+            } else if (b.theme == 1) {
+                // 상업: 체커보드 타일
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+                for (int gy = sy1+WALL_T; gy < sy2-WALL_T; gy += tsz)
+                    for (int gx = sx1+WALL_T; gx < sx2-WALL_T; gx += tsz) {
+                        bool chk = ((gx/tsz + gy/tsz) % 2 == 0);
+                        SDL_SetRenderDrawColor(m_renderer, 0,0,0, chk ? 22 : 6);
+                        SDL_Rect cr = {gx, gy, tsz, tsz};
+                        SDL_RenderFillRect(m_renderer, &cr);
+                    }
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+            } else if (b.theme == 2) {
+                // 공업: 철망 그레이팅 (촘촘한 격자)
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0, 38);
+                int gs = std::max(3, tsz/4);
+                for (int gy = sy1+WALL_T; gy <= sy2-WALL_T; gy += gs)
+                    SDL_RenderDrawLine(m_renderer, sx1+WALL_T, gy, sx2-WALL_T, gy);
+                for (int gx = sx1+WALL_T; gx <= sx2-WALL_T; gx += gs)
+                    SDL_RenderDrawLine(m_renderer, gx, sy1+WALL_T, gx, sy2-WALL_T);
+            } else if (b.theme == 3) {
+                // 군사: 콘크리트 균열 (듬성한 수평선)
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0, 20);
+                for (int gy = sy1+WALL_T; gy <= sy2-WALL_T; gy += tsz)
+                    SDL_RenderDrawLine(m_renderer, sx1+WALL_T, gy, sx2-WALL_T, gy);
+            }
                 
             // 벽 (문 위치를 제외하고 그리기)
             SDL_SetRenderDrawColor(m_renderer, wallCol.r, wallCol.g, wallCol.b, 255);
@@ -851,6 +919,68 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
                 SDL_RenderFillRect(m_renderer, &vDiv);
             }
 
+            // 테마별 내부 소품
+            int iX = sx1+WALL_T+2, iY = sy1+WALL_T+2;
+            int iW = pw-2*WALL_T-4, iH = ph-2*WALL_T-4;
+            int p  = std::max(3, tsz/6);
+            SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+            if (b.theme == 0 && iW > p*6 && iH > p*6) {
+                // 침대
+                SDL_SetRenderDrawColor(m_renderer, 145,125,100,190);
+                SDL_Rect bed = {iX, iY, iW/3, iH*2/5};
+                SDL_RenderFillRect(m_renderer, &bed);
+                SDL_SetRenderDrawColor(m_renderer, 225,210,185,200);
+                SDL_Rect pillow = {iX+p, iY+p, iW/7, iH/8};
+                SDL_RenderFillRect(m_renderer, &pillow);
+                // 테이블
+                SDL_SetRenderDrawColor(m_renderer, 118,88,52,190);
+                SDL_Rect tbl = {iX+iW*2/3, iY+iH/2, iW/4, iH/3};
+                SDL_RenderFillRect(m_renderer, &tbl);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,40);
+                SDL_RenderDrawRect(m_renderer, &tbl);
+            } else if (b.theme == 1 && iW > p*6 && iH > p*6) {
+                // 계산대
+                SDL_SetRenderDrawColor(m_renderer, 175,170,162,200);
+                SDL_Rect counter = {iX, iY+iH*2/3, iW*3/5, p*3};
+                SDL_RenderFillRect(m_renderer, &counter);
+                // 선반 3개
+                SDL_SetRenderDrawColor(m_renderer, 190,188,182,180);
+                for (int si = 0; si < 3; ++si) {
+                    SDL_Rect shelf = {iX + si*(iW/3), iY, iW/4, p*2};
+                    SDL_RenderFillRect(m_renderer, &shelf);
+                }
+            } else if (b.theme == 2 && iW > p*6 && iH > p*6) {
+                // 기계 블록
+                SDL_SetRenderDrawColor(m_renderer, 85,83,78,200);
+                SDL_Rect mach = {iX+iW/4, iY+iH/4, iW/2, iH/2};
+                SDL_RenderFillRect(m_renderer, &mach);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,60);
+                SDL_RenderDrawRect(m_renderer, &mach);
+                // 드럼통 2개
+                SDL_SetRenderDrawColor(m_renderer, 85,72,38,200);
+                for (int bi = 0; bi < 2; ++bi) {
+                    SDL_Rect barrel = {iX+bi*(p*3+3), iY+iH*3/4, p*3, p*3};
+                    SDL_RenderFillRect(m_renderer, &barrel);
+                    SDL_SetRenderDrawColor(m_renderer, 0,0,0,50);
+                    SDL_RenderDrawRect(m_renderer, &barrel);
+                    SDL_SetRenderDrawColor(m_renderer, 85,72,38,200);
+                }
+            } else if (b.theme == 3 && iW > p*6 && iH > p*6) {
+                // 지휘 테이블 (중앙)
+                SDL_SetRenderDrawColor(m_renderer, 58,70,48,210);
+                SDL_Rect ctbl = {iX+iW/3, iY+iH/3, iW/3, iH/3};
+                SDL_RenderFillRect(m_renderer, &ctbl);
+                SDL_SetRenderDrawColor(m_renderer, 95,115,75,200);
+                SDL_RenderDrawRect(m_renderer, &ctbl);
+                // 모래주머니 (코너)
+                SDL_SetRenderDrawColor(m_renderer, 98,88,58,200);
+                SDL_Rect sb1 = {iX,      iY,      p*4, p*2};
+                SDL_Rect sb2 = {iX+iW-p*4, iY,    p*4, p*2};
+                SDL_RenderFillRect(m_renderer, &sb1);
+                SDL_RenderFillRect(m_renderer, &sb2);
+            }
+            SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+
             // 내부 시야: 지붕은 완전히 사라지지 않고 낮은 알파로 남겨 건물 경계를 유지
             SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, isInside ? 42 : 72);
@@ -858,32 +988,107 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
             SDL_RenderFillRect(m_renderer, &roofTint);
             SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
         } else {
-            // Roof
-            SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 255);
+            // 지붕: 테마별 타일 텍스처로 채우기
+            static const char* roofTex[] = {
+                "tile_wall_brick",    // 0 주거: 벽돌
+                "tile_wall_conc",     // 1 상업: 콘크리트
+                "tile_wall_metal",    // 2 공업: 금속
+                "tile_wall_mil",      // 3 군사: 군용 콘크리트
+            };
+            int themeIdx = std::min(3, b.theme);
+            SDL_Texture* roofT = m_texCache.get(roofTex[themeIdx]);
             SDL_Rect roofRect = {sx1, sy1, pw, ph};
-            SDL_RenderFillRect(m_renderer, &roofRect);
+            if (roofT) {
+                // 타일 텍스처로 지붕 전체 채우기 (tiling)
+                int tileW = std::max(1, static_cast<int>(64 * cam.zoom));
+                int tileH = tileW;
+                for (int ry = sy1; ry < sy1 + ph; ry += tileH)
+                    for (int rx = sx1; rx < sx1 + pw; rx += tileW) {
+                        SDL_Rect cell = {rx, ry, std::min(tileW, sx1+pw-rx), std::min(tileH, sy1+ph-ry)};
+                        SDL_RenderCopy(m_renderer, roofT, nullptr, &cell);
+                    }
+                // 테마별 색조 오버레이
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 80);
+                SDL_RenderFillRect(m_renderer, &roofRect);
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+            } else {
+                SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 255);
+                SDL_RenderFillRect(m_renderer, &roofRect);
+            }
             
-            // Roof details
-            SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 60);
+            // 테마별 지붕 외관
             if (b.theme == 0) {
-                SDL_RenderDrawLine(m_renderer, sx1, sy1, sx1+pw/2, sy1+ph/2);
-                SDL_RenderDrawLine(m_renderer, sx2, sy1, sx1+pw/2, sy1+ph/2);
-                SDL_RenderDrawLine(m_renderer, sx1, sy2, sx1+pw/2, sy1+ph/2);
-                SDL_RenderDrawLine(m_renderer, sx2, sy2, sx1+pw/2, sy1+ph/2);
-                SDL_RenderDrawLine(m_renderer, sx1, sy1+ph/2, sx2, sy1+ph/2);
+                // 주거: 박공지붕 능선 + 굴뚝
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,65);
+                SDL_RenderDrawLine(m_renderer, sx1,  sy1,      sx1+pw/2, sy1+ph/3);
+                SDL_RenderDrawLine(m_renderer, sx2,  sy1,      sx1+pw/2, sy1+ph/3);
+                SDL_RenderDrawLine(m_renderer, sx1+pw/2, sy1+ph/3, sx1+pw/2, sy2-ph/3);
+                int chW = std::max(4, pw/8), chH = std::max(4, ph/8);
+                SDL_SetRenderDrawColor(m_renderer, 155,75,55,255);
+                SDL_Rect chimney = {sx1+pw*3/4, sy1+ph/10, chW, chH};
+                SDL_RenderFillRect(m_renderer, &chimney);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,50);
+                SDL_RenderDrawRect(m_renderer, &chimney);
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(m_renderer, 255,255,255,30);
+                SDL_RenderDrawLine(m_renderer, sx1, sy1, sx2, sy1);
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
             } else if (b.theme == 1) {
+                // 상업: 평지붕 + 유리 띠 + AC 유닛
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(m_renderer, 180,225,255,55);
+                SDL_Rect gl1 = {sx1, sy1, pw, WALL_T};
+                SDL_Rect gl2 = {sx1, sy2-WALL_T, pw, WALL_T};
+                SDL_RenderFillRect(m_renderer, &gl1);
+                SDL_RenderFillRect(m_renderer, &gl2);
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,40);
                 SDL_Rect inner = {sx1+WALL_T, sy1+WALL_T, pw-2*WALL_T, ph-2*WALL_T};
                 SDL_RenderDrawRect(m_renderer, &inner);
-                SDL_Rect ac = {sx1+pw/4, sy1+ph/4, pw/6, ph/6};
-                SDL_RenderFillRect(m_renderer, &ac);
+                int acSz = std::max(5, pw/7);
+                SDL_SetRenderDrawColor(m_renderer, 158,165,172,255);
+                SDL_Rect ac1 = {sx1+pw/5,     sy1+ph/4, acSz, acSz};
+                SDL_Rect ac2 = {sx2-pw/5-acSz, sy1+ph/4, acSz, acSz};
+                SDL_RenderFillRect(m_renderer, &ac1);
+                SDL_RenderFillRect(m_renderer, &ac2);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,55);
+                SDL_RenderDrawRect(m_renderer, &ac1);
+                SDL_RenderDrawRect(m_renderer, &ac2);
             } else if (b.theme == 2) {
-                for (int gx = sx1; gx < sx2; gx += static_cast<int>(8*cam.zoom))
+                // 공업: 물결 금속 지붕 + 환기구
+                int step = std::max(3, static_cast<int>(5*cam.zoom));
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,50);
+                for (int gx = sx1; gx < sx2; gx += step)
                     SDL_RenderDrawLine(m_renderer, gx, sy1, gx, sy2);
+                SDL_SetRenderDrawColor(m_renderer, 255,255,255,18);
+                for (int gx = sx1; gx < sx2; gx += step*2)
+                    SDL_RenderDrawLine(m_renderer, gx, sy1, gx, sy2);
+                int vSz = std::max(5, pw/9);
+                SDL_SetRenderDrawColor(m_renderer, 52,58,56,255);
+                SDL_Rect vent = {sx1+pw/2-vSz/2, sy1+ph/2-vSz/2, vSz, vSz};
+                SDL_RenderFillRect(m_renderer, &vent);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,80);
+                SDL_RenderDrawRect(m_renderer, &vent);
             } else if (b.theme == 3) {
-                SDL_Rect inner = {sx1+WALL_T*2, sy1+WALL_T*2, pw-4*WALL_T, ph-4*WALL_T};
-                SDL_RenderDrawRect(m_renderer, &inner);
-                SDL_RenderDrawLine(m_renderer, sx1, sy1, sx2, sy2);
-                SDL_RenderDrawLine(m_renderer, sx1, sy2, sx2, sy1);
+                // 군사: 벙커 — 강화 코너 + 위장 패치 + X
+                int bt = WALL_T*2;
+                SDL_SetRenderDrawColor(m_renderer, std::max(0,roofCol.r-18), std::max(0,roofCol.g-18), std::max(0,roofCol.b-18), 255);
+                SDL_Rect corners[4] = {
+                    {sx1, sy1, bt, bt}, {sx2-bt, sy1, bt, bt},
+                    {sx1, sy2-bt, bt, bt}, {sx2-bt, sy2-bt, bt, bt}
+                };
+                for (auto& cr : corners) SDL_RenderFillRect(m_renderer, &cr);
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,28);
+                SDL_Rect patch1 = {sx1+pw/4,    sy1+ph/5, pw/4, ph/5};
+                SDL_Rect patch2 = {sx2-pw*5/12, sy2-ph/3, pw/5, ph/4};
+                SDL_RenderFillRect(m_renderer, &patch1);
+                SDL_RenderFillRect(m_renderer, &patch2);
+                SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(m_renderer, 0,0,0,48);
+                SDL_RenderDrawLine(m_renderer, sx1+bt, sy1+bt, sx2-bt, sy2-bt);
+                SDL_RenderDrawLine(m_renderer, sx1+bt, sy2-bt, sx2-bt, sy1+bt);
             }
         }
         
@@ -967,38 +1172,43 @@ void Renderer::drawLootBox(const LootBoxView& box, const Camera& cam) {
             drawText("F  파밍", sx, sy - bh - 4, {255, 240, 100, pa}, fSm, true);
         }
     } else if (box.isBuilding) {
-        // Simple distinct drawing for buildings
-        bw = static_cast<int>(32 * cam.zoom);
-        bh = static_cast<int>(32 * cam.zoom);
+        // Use TextureCache sprites for buildings
+        bw = static_cast<int>(40 * cam.zoom);
+        bh = static_cast<int>(40 * cam.zoom);
+        SDL_Rect body = {sx - bw/2, sy - bh/2, bw, bh};
         
-        SDL_Color bColor = {100, 100, 100, 255}; // Default Grey
-        if (box.buildingType == 0) bColor = {139, 69, 19, 255}; // Barricade (Wood)
-        else if (box.buildingType == 1) bColor = {70, 70, 90, 255}; // Turret (Metal)
-        else if (box.buildingType == 2) bColor = {180, 130, 70, 255}; // Workbench
-        
-        SDL_SetRenderDrawColor(m_renderer, bColor.r, bColor.g, bColor.b, bColor.a);
-        SDL_Rect body = {sx-bw/2, sy-bh/2, bw, bh};
-        SDL_RenderFillRect(m_renderer, &body);
-        SDL_SetRenderDrawColor(m_renderer, bColor.r/2, bColor.g/2, bColor.b/2, 255);
-        SDL_RenderDrawRect(m_renderer, &body);
-        
-        if (box.buildingType == 2 && box.nearPlayer) { // Workbench near
-            float pulse = std::sin(ticks * 4.0f) * 0.5f + 0.5f;
-            uint8_t pa = static_cast<uint8_t>(150 + pulse * 105);
-            SDL_SetRenderDrawColor(m_renderer, 100, 255, 100, pa);
-            SDL_Rect glow = {sx-bw/2-2, sy-bh/2-2, bw+4, bh+4};
-            SDL_RenderDrawRect(m_renderer, &glow);
-            drawText("F  제작대 사용", sx, sy - bh/2 - 12, {100, 255, 100, pa}, fSm, true);
+        if (box.buildingType == 0) { // Barricade
+            SDL_Texture* tex = m_texCache.get("prop_barricade");
+            if (tex) SDL_RenderCopy(m_renderer, tex, nullptr, &body);
+        } else if (box.buildingType == 1) { // Turret
+            SDL_Texture* baseTex = m_texCache.get("bld_turret_base");
+            SDL_Texture* headTex = m_texCache.get("bld_turret_head");
+            if (baseTex) SDL_RenderCopy(m_renderer, baseTex, nullptr, &body);
+            if (headTex) {
+                // 실제 설치 방향으로 회전 (0=N, 1=E, 2=S, 3=W → 0°, 90°, 180°, 270°)
+                double angle = static_cast<double>(box.turretDir) * 90.0;
+                SDL_RenderCopyEx(m_renderer, headTex, nullptr, &body, angle, nullptr, SDL_FLIP_NONE);
+            }
+        } else if (box.buildingType == 2) { // Workbench
+            SDL_Texture* tex = m_texCache.get("bld_workbench");
+            if (tex) SDL_RenderCopy(m_renderer, tex, nullptr, &body);
+            
+            if (box.nearPlayer) { // Workbench near
+                float pulse = std::sin(ticks * 4.0f) * 0.5f + 0.5f;
+                uint8_t pa = static_cast<uint8_t>(150 + pulse * 105);
+                SDL_SetRenderDrawColor(m_renderer, 100, 255, 100, pa);
+                SDL_Rect glow = {sx-bw/2-2, sy-bh/2-2, bw+4, bh+4};
+                SDL_RenderDrawRect(m_renderer, &glow);
+                drawText("F  제작대 사용", sx, sy - bh/2 - 12, {100, 255, 100, pa}, fSm, true);
+            }
         }
     } else {
-        SDL_SetRenderDrawColor(m_renderer, 65, 58, 42, 200);
-        SDL_Rect body = {sx-bw/2, sy-bh/2+bh/3, bw, bh*2/3};
-        SDL_RenderFillRect(m_renderer, &body);
-        SDL_SetRenderDrawColor(m_renderer, 50, 45, 32, 200);
-        SDL_RenderDrawRect(m_renderer, &body);
-        SDL_SetRenderDrawColor(m_renderer, 75, 68, 50, 180);
-        SDL_Rect openLid = {sx-bw/2+2, sy-bh/2, bw-4, bh/3};
-        SDL_RenderFillRect(m_renderer, &openLid);
+        bw = static_cast<int>(32 * cam.zoom);
+        bh = static_cast<int>(32 * cam.zoom);
+        SDL_Rect body = {sx - bw/2, sy - bh/2, bw, bh};
+        
+        SDL_Texture* tex = m_texCache.get(box.looted ? "bld_loot_open" : "bld_loot_closed");
+        if (tex) SDL_RenderCopy(m_renderer, tex, nullptr, &body);
     }
 }
 
@@ -1197,13 +1407,29 @@ void Renderer::drawLocalPlayer(float wx, float wy, float angle, float hpPct,
                                 bool bleeding, int teamID, const Camera& cam,
                                 const std::string& weaponName,
                                 const std::string& weaponGrade,
-                                float attackTimer, float attackAngle) {
+                                float attackTimer, float attackAngle,
+                                int charDir, bool charMoving) {
     int sx, sy;
     cam.worldToScreen(wx, wy, sx, sy);
     int sz = static_cast<int>(22*cam.zoom);
     SDL_Color tc = Col::TEAM[std::max(0,std::min(4,teamID))];
     float animT = (attackTimer > 0.0f) ? (SDL_GetTicks()*0.015f) : (SDL_GetTicks()*0.005f);
-    drawCharacterBody(this, sx, sy, sz, angle, tc, bleeding, false, animT);
+
+    // 캐릭터 애니메이션 스프라이트 (WASD 방향 기준)
+    {
+        static const char* dirs[] = {"S","N","E","W"};
+        int frame = charMoving ? (static_cast<int>(SDL_GetTicks()/125) % 3 + 1) : 0;
+        std::string key = std::string("char_player_") + dirs[charDir] + "_" + std::to_string(frame);
+        SDL_Texture* tex = m_texCache.get(key);
+        if (tex) {
+            int h = sz*3, w = h*464/460;
+            SDL_Rect dst = {sx-w/2, sy-h+sz/3, w, h};
+            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+            SDL_RenderCopy(m_renderer, tex, nullptr, &dst);
+        } else {
+            drawCharacterBody(this, sx, sy, sz, angle, tc, bleeding, false, animT);
+        }
+    }
 
     // 조준선 — 몸통 상단에서 뻗음
     int feetY = sy + sz*35/100;
@@ -1430,12 +1656,39 @@ static void drawRemoteEntity(Renderer* rnd, SDL_Renderer* r, TTF_Font* /*fSm*/,
     int sx, sy;
     cam.worldToScreen(wx, wy, sx, sy);
 
+    // 화면 밖 엔티티 컬링 (좀비 다수일 때 렌더링 부하 감소)
+    const int CULL_MARGIN = 120;
+    if (sx < -CULL_MARGIN || sx > cam.screenW + CULL_MARGIN ||
+        sy < -CULL_MARGIN || sy > cam.screenH + CULL_MARGIN) return;
+
     bool bleed    = (rem.snap[1].statusFlags & STATUS_BLEEDING) != 0;
     bool onFire   = (rem.snap[1].statusFlags & STATUS_ON_FIRE)  != 0;
     bool isZombie = (rem.recType == REC_ZOMBIE);
 
+    // 방향 계산 (이동 벡터 기준)
+    auto movDir = [](float dx, float dy) -> const char* {
+        if (std::abs(dx) < 0.3f && std::abs(dy) < 0.3f) return "_S";
+        float a = std::atan2(dy, dx) * (180.0f / 3.14159265f);
+        if (a >= -45 && a < 45)   return "_E";
+        if (a >= 45  && a < 135)  return "_S";
+        if (a >= -135&& a < -45)  return "_N";
+        return "_W";
+    };
+    // 스프라이트 렌더 헬퍼: 중앙 하단 기준으로 그림
+    auto drawSprite = [&](SDL_Texture* tex, int cx, int cy, int sz, uint8_t alpha=255) -> bool {
+        if (!tex) return false;
+        int h = sz * 3;
+        int w = h * 167 / 224;
+        SDL_Rect dst = {cx - w/2, cy - h + sz/3, w, h};
+        SDL_SetTextureAlphaMod(tex, alpha);
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_RenderCopy(r, tex, nullptr, &dst);
+        SDL_SetTextureAlphaMod(tex, 255);
+        return true;
+    };
+
     if (isZombie) {
-        uint8_t zt = rem.snap[1].statusFlags >> 6;
+        uint8_t zt = (rem.snap[1].statusFlags >> 5) & 0x03; // bits5-6 (STATUS_DEAD=bit7 충돌 회피)
         int sz;
         SDL_Color bc;
         if (zt == ZT_BRUTE)       { sz = static_cast<int>(30*cam.zoom); bc = {40,130,40,255}; }
@@ -1444,6 +1697,25 @@ static void drawRemoteEntity(Renderer* rnd, SDL_Renderer* r, TTF_Font* /*fSm*/,
         float dx = rem.snap[1].x - rem.snap[0].x;
         float dy = rem.snap[1].y - rem.snap[0].y;
         float aimAngle = (dx != 0 || dy != 0) ? std::atan2(dy, dx) * (180.0f / 3.14159265f) : 0.0f;
+
+        // 애니메이션 스프라이트
+        const char* dirs[] = {"S","N","E","W","D"};
+        float spd = std::sqrt(dx*dx + dy*dy);
+        bool zMoving = spd > 0.5f;
+        int zDir = 0; // S default
+        if (zMoving) {
+            float a = std::atan2(dy, dx) * (180.0f / 3.14159265f);
+            if (a>=-45&&a<45) zDir=2; else if (a>=45&&a<135) zDir=0;
+            else if (std::abs(a)>=135) zDir=3; else zDir=1;
+        }
+        int zFrame = zMoving ? (static_cast<int>(SDL_GetTicks()/125) % 3 + 1) : 0;
+        const char* zType = (zt==ZT_BRUTE) ? "brute" : (zt==ZT_RUNNER) ? "runner" : "shambler";
+        bool isDead2 = (rem.snap[1].statusFlags & STATUS_DEAD) != 0;
+        std::string sprKey = isDead2
+            ? (std::string("char_")+zType+"_D_3")
+            : (std::string("char_")+zType+"_"+dirs[zDir]+"_"+std::to_string(zFrame));
+        SDL_Texture* zTex = rnd->textures().get(sprKey);
+        bool usedSprite = drawSprite(zTex, sx, sy, sz);
         
         bool isDead = (rem.snap[1].statusFlags & STATUS_DEAD) != 0;
         if (isDead) {
@@ -1452,7 +1724,8 @@ static void drawRemoteEntity(Renderer* rnd, SDL_Renderer* r, TTF_Font* /*fSm*/,
         }
 
         float animT = SDL_GetTicks() * 0.005f + rem.entityID * 0.1f;
-        drawCharacterBody(rnd, sx, sy, sz, aimAngle + 90.0f, bc, bleed, true, animT);
+        if (!usedSprite)
+            drawCharacterBody(rnd, sx, sy, sz, aimAngle + 90.0f, bc, bleed, true, animT);
 
         int bodyH = sz*13/10;
         int bodyTop = sy - bodyH;
@@ -1501,7 +1774,19 @@ static void drawRemoteEntity(Renderer* rnd, SDL_Renderer* r, TTF_Font* /*fSm*/,
         }
 
         float animT = SDL_GetTicks() * 0.005f + rem.entityID * 0.1f;
-        drawCharacterBody(rnd, sx, sy, sz, aimAngle + 90.0f, oc, bleed, false, animT);
+        bool pMoving = (std::abs(dx)+std::abs(dy)) > 0.5f;
+        int pDir = 0;
+        if (pMoving) {
+            float a = std::atan2(dy, dx) * (180.0f/3.14159265f);
+            if (a>=-45&&a<45) pDir=2; else if (a>=45&&a<135) pDir=0;
+            else if (std::abs(a)>=135) pDir=3; else pDir=1;
+        }
+        int pFrame = pMoving ? (static_cast<int>(SDL_GetTicks()/125)%3+1) : 0;
+        static const char* pdirs[] = {"S","N","E","W"};
+        std::string pKey = std::string("char_player_")+pdirs[pDir]+"_"+std::to_string(pFrame);
+        SDL_Texture* pTex = rnd->textures().get(pKey);
+        if (!drawSprite(pTex, sx, sy, sz))
+            drawCharacterBody(rnd, sx, sy, sz, aimAngle + 90.0f, oc, bleed, false, animT);
         if (onFire) {
             rnd->drawFilledCircle(sx, sy - sz, sz, {255, 80, 0, 150});
         }
@@ -1528,7 +1813,8 @@ void Renderer::drawWorldEntities(const NetworkClient& net, const Camera& cam,
                                  float hpPct, bool bleeding, int teamID,
                                  const std::string& wName,
                                  const std::string& wGrade,
-                                 float attackTimer, float attackAngle) {
+                                 float attackTimer, float attackAngle,
+                                 int charDir, bool charMoving) {
     enum class EntryType { LocalPlayer, RemoteEntity, LootBox, BuildingOverlay };
     struct Entry { float wy; EntryType type; int idx; };
     std::vector<Entry> list;
@@ -1590,7 +1876,8 @@ void Renderer::drawWorldEntities(const NetworkClient& net, const Camera& cam,
     for (const auto& e : list) {
         if (e.type == EntryType::LocalPlayer) {
             drawLocalPlayer(localX, localY, aimAngle, hpPct, bleeding,
-                            teamID, cam, wName, wGrade, attackTimer, attackAngle);
+                            teamID, cam, wName, wGrade, attackTimer, attackAngle,
+                            charDir, charMoving);
         } else if (e.type == EntryType::RemoteEntity) {
             const auto& rem = net.remotes()[e.idx];
             float t  = std::min(1.0f, rem.interpT / std::max(rem.snapDt, 0.001f));
@@ -2553,7 +2840,7 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
 // ─────────────────────────────────────────────────────────────────────────────
 // drawCraftingUI
 // ─────────────────────────────────────────────────────────────────────────────
-void Renderer::drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY, int& outClickedRecipe) {
+void Renderer::drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY, int& outClickedRecipe, int scrollOffset) {
     outClickedRecipe = -1;
     TTF_Font* fSm  = m_fonts.get(13);
     TTF_Font* fMd  = m_fonts.get(16);
@@ -2593,10 +2880,16 @@ void Renderer::drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY
     };
 
     // 레시피 목록 렌더링
-    const int ROW_H  = 76; // 더 굵직한 행 높이
+    const int ROW_H  = 76;
     const int PAD    = 12;
-    int recipeY = boxY + 66;
+    const int contentTop    = boxY + 66;
+    const int contentBottom = boxY + CH - 32;
+    int recipeY = contentTop - scrollOffset;
     const float ticks = SDL_GetTicks() * 0.001f;
+
+    // 레시피 영역 클리핑
+    SDL_Rect clipRect = {boxX, contentTop, CW, contentBottom - contentTop};
+    SDL_RenderSetClipRect(m_renderer, &clipRect);
 
     for (int ri = 0; ri < CRAFT_RECIPE_COUNT; ++ri) {
         const CraftingRecipe& rec = CRAFT_RECIPES[ri];
@@ -2687,9 +2980,12 @@ void Renderer::drawCraftingUI(const ClientInventory& inv, int mouseX, int mouseY
         }
     }
 
+    // 클리핑 해제
+    SDL_RenderSetClipRect(m_renderer, nullptr);
+
     // 하단 안내
     drawPanel(boxX, boxY+CH-32, CW, 32, {10,13,20,240}, Col::BORDER, 0);
-    drawText("클릭으로 제작  |  워크벤치 표시 레시피는 근처에 워크벤치가 필요합니다",
+    drawText("클릭으로 제작  |  워크벤치 레시피는 제작대 근처에서만 가능",
              boxX+CW/2, boxY+CH-21, Col::TEXT_LO, fKey, true);
 }
 
@@ -2979,7 +3275,7 @@ void Renderer::drawNoiseDebug(float wx, float wy, float radius, const Camera& ca
 // drawBuildModeOverlay — 건설 모드일 때 마우스 타일 강조 + 안내 패널
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawBuildModeOverlay(bool active, int buildType,
-                                     int mouseX, int mouseY, const Camera& cam) {
+                                     int mouseX, int mouseY, const Camera& cam, int turretDir) {
     if (!active) return;
 
     TTF_Font* f   = m_fonts.get(14);
@@ -3030,11 +3326,37 @@ void Renderer::drawBuildModeOverlay(bool active, int buildType,
         SDL_RenderDrawLine(m_renderer, sx+2, sy+2, sx+sw-2, sy+sw-2);
         SDL_RenderDrawLine(m_renderer, sx+sw-2, sy+2, sx+2, sy+sw-2);
     } else if (buildType == 1) {
-        // 포탑: 원형 포신 표시
+        // 포탑: 원형 받침 + 방향 포신 + 사격 범위 호
         drawFilledCircle(sx+sw/2, sy+sw/2, sw/4,
                          {lineCol.r,lineCol.g,lineCol.b,static_cast<uint8_t>(borderA/2)});
+
+        // turretDir: 0=N 1=E 2=S 3=W → 포신 끝점
+        const int cx = sx+sw/2, cy = sy+sw/2;
+        int ex = cx, ey = cy;
+        int arcLen = sw/2 - 2;
+        switch (turretDir) {
+            case 0: ey = cy - arcLen; break; // 북
+            case 1: ex = cx + arcLen; break; // 동
+            case 2: ey = cy + arcLen; break; // 남
+            case 3: ex = cx - arcLen; break; // 서
+        }
         SDL_SetRenderDrawColor(m_renderer, lineCol.r, lineCol.g, lineCol.b, borderA);
-        SDL_RenderDrawLine(m_renderer, sx+sw/2, sy+sw/2, sx+sw/2, sy+2);
+        SDL_RenderDrawLine(m_renderer, cx, cy, ex, ey);
+
+        // 사격 호 (45° 양쪽) — 점선으로 표현
+        constexpr float PI = 3.14159265f;
+        float baseAngle = turretDir * 90.0f;
+        SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(m_renderer, lineCol.r, lineCol.g, lineCol.b, borderA/3);
+        float arcR = static_cast<float>(arcLen + sw/4);
+        for (int da = -45; da <= 45; da += 3) {
+            float rad = (baseAngle - 90.0f + da) * (PI / 180.0f);
+            int ax = cx + static_cast<int>(std::cos(rad) * arcR);
+            int ay = cy + static_cast<int>(std::sin(rad) * arcR);
+            SDL_RenderDrawLine(m_renderer, cx, cy, ax, ay);
+        }
+        SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(m_renderer, lineCol.r, lineCol.g, lineCol.b, borderA);
     } else {
         // 제작대: 3×3 격자
         int cellSz = sw/3;
@@ -3108,7 +3430,7 @@ void Renderer::drawBuildRecipePanel(const ClientInventory& inv, int buildType) {
 
     drawPanel(x, y, W, H, {12,16,20,225}, {70,76,84,230}, 3);
     drawText("건설 조합법", x + PAD, y + 12, {240,240,230,255}, fTitle);
-    drawText("B: 취소  V: 전환", x + W - PAD, y + 14, Col::TEXT_LO, fSm, true);
+    drawText("Z=바리케이드  X=포탑  C=제작대", x + W - PAD, y + 14, Col::TEXT_LO, fSm, true);
 
     int rowY = y + 42;
     for (int ri = 0; ri < BUILD_RECIPE_COUNT; ++ri) {

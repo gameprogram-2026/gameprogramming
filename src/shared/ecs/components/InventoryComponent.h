@@ -144,16 +144,7 @@ struct InventoryComponent {
     bool equip(int gridIndex, EquipSlot slot) noexcept {
         if (gridIndex < 0 || gridIndex >= INVENTORY_GRID_SLOTS) return false;
         int si = static_cast<int>(slot);
-        if (slots[gridIndex].isValid() &&
-            slots[gridIndex].category == ItemCategory::Weapon &&
-            slots[gridIndex].quantity > 1 &&
-            !equipped[si].isValid()) {
-            equipped[si] = slots[gridIndex];
-            equipped[si].quantity = 1;
-            --slots[gridIndex].quantity;
-            recalculateGridStats();
-            return true;
-        }
+        // 무기는 항상 통째로 스왑 (quantity = 내구도이므로 스택 분할 금지)
         std::swap(slots[gridIndex], equipped[si]);
         recalculateGridStats();
         return true;

@@ -29,7 +29,9 @@ public:
         x = m_clickX; y = m_clickY; return true;
     }
     bool consumeClick(int& x, int& y) noexcept;
+    bool consumeRightClick(int& x, int& y) noexcept;
     bool consumeMouseUp(int& x, int& y) noexcept;
+    int  consumeWheel() noexcept { int v = m_wheelDelta; m_wheelDelta = 0; return v; }
     void mousePos(int& x, int& y) const noexcept;
 
     void setFocusedTextInput(std::string* target) {
@@ -48,6 +50,10 @@ private:
     bool     m_hasClick      = false;
     int      m_clickX        = 0;
     int      m_clickY        = 0;
+    bool     m_hasRightClick = false;
+    int      m_rightClickX   = 0;
+    int      m_rightClickY   = 0;
+    int      m_wheelDelta    = 0;
     bool     m_hasMouseUp    = false;
     int      m_mouseUpX      = 0;
     int      m_mouseUpY      = 0;
