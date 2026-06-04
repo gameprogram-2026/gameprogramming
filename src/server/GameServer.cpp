@@ -51,7 +51,7 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
     m_net.onDoorToggle     ([this](uint32_t i, uint16_t doorID)      { onDoorToggleReq(i, doorID); });
     m_net.onUseItem        ([this](uint32_t i, const char* k)        { onUseItem(i, k); });
     m_net.onAlliancePropose([this](uint32_t i, uint8_t toTeam)       { onAllianceProposeReq(i, toTeam); });
-    m_net.onBuildPlace     ([this](uint32_t i, int16_t tx, int16_t ty, uint8_t bt){ onBuildPlace(i,tx,ty,bt); });
+    m_net.onBuildPlace     ([this](uint32_t i, int16_t tx, int16_t ty, uint8_t bt, uint8_t dir){ onBuildPlace(i,tx,ty,bt,dir); });
     m_net.onCraft          ([this](uint32_t i, uint8_t recipeID)     { onCraftRequest(i, recipeID); });
     m_net.onLootPickup     ([this](uint32_t i, uint32_t nid)         { onLootPickupReq(i, nid); });
 
@@ -301,7 +301,8 @@ void GameServer::tick(float dt) {
         pkt.header.type = PacketType::S2C_ExtractionUpdate;
         pkt.header.tick = m_tick;
         pkt.progress = prog;
-        pkt.zoneID = 0; // TODO: get zoneID if needed
+        const auto* es = m_extraction.stateOf(netID);
+        pkt.zoneID = es ? es->zoneID : 0xFF;
         m_net.sendUnreliable(pi, &pkt, sizeof(pkt));
     }
 }
@@ -339,7 +340,7 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     ack.packetType = static_cast<uint8_t>(PacketType::S2C_AuthAck);
     
     if (isRegister) {
-        if (m_db.registerAccount(username, password)) {
+        if (!m_db.isConnected() ||m_db.registerAccount(username, password)) {
             ack.success = 1;
             std::strncpy(ack.message, "Registration successful!", sizeof(ack.message));
             m_net.sendReliable(peerIdx, &ack, sizeof(ack));
@@ -369,11 +370,16 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     }
 
     InventoryComponent loadedInv;
-    if (!m_db.loginAccount(username, password, loadedInv)) {
-        ack.success = 0;
-        std::strncpy(ack.message, "Login failed. Check credentials.", sizeof(ack.message));
-        m_net.sendReliable(peerIdx, &ack, sizeof(ack));
-        return;
+    if (m_db.isConnected()) {
+        if (!m_db.loginAccount(username, password, loadedInv)) {
+            ack.success = 0;
+            std::strncpy(ack.message, "Login failed. Check credentials.", sizeof(ack.message));
+            m_net.sendReliable(peerIdx, &ack, sizeof(ack));
+            return;
+        }
+    } else {
+        // DB 미연결 시 계정 검증 없이 허용 (테스트 / 오프라인 모드)
+        DZ_LOG_WARN("[Server] DB offline — accepting '%s' without verification", username);
     }
     
     ack.success = 1;
@@ -1042,9 +1048,19 @@ void GameServer::onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam) {
 // ─────────────────────────────────────────────────────────────────────────────
 // onBuildPlace — 건설 배치 처리
 // ─────────────────────────────────────────────────────────────────────────────
-void GameServer::onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t btype) {
-    if (m_logic) m_logic->handleBuildRequest(peerIdx, tileX, tileY,
-                                              static_cast<BuildingType>(btype));
+void GameServer::onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t btype, uint8_t dir) {
+    bool ok = m_logic && m_logic->handleBuildRequest(peerIdx, tileX, tileY,
+                                                      static_cast<BuildingType>(btype), dir);
+    BuildAckPacket ack{};
+    ack.packetType = static_cast<uint8_t>(PacketType::S2C_BuildAck);
+    ack.success = ok ? 1 : 0;
+    if (ok) {
+        std::strncpy(ack.message, "건설 완료!", sizeof(ack.message) - 1);
+        sendInventorySyncToPeer(peerIdx); // 재료 소모 즉시 반영
+    } else {
+        std::strncpy(ack.message, "재료 부족 또는 설치 불가 위치입니다.", sizeof(ack.message) - 1);
+    }
+    m_net.sendReliable(peerIdx, &ack, sizeof(ack));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1125,7 +1141,17 @@ void GameServer::syncDoorStatesToPeer(uint32_t peerIdx) {
 // onCraftRequest
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::onCraftRequest(uint32_t peerIdx, uint8_t recipeID) {
-    if (m_logic) m_logic->handleCraftRequest(peerIdx, recipeID);
+    bool ok = m_logic && m_logic->handleCraftRequest(peerIdx, recipeID);
+    CraftAckPacket ack{};
+    ack.packetType = static_cast<uint8_t>(PacketType::S2C_CraftAck);
+    ack.success = ok ? 1 : 0;
+    if (ok) {
+        std::strncpy(ack.message, "조합 완료!", sizeof(ack.message) - 1);
+        sendInventorySyncToPeer(peerIdx);
+    } else {
+        std::strncpy(ack.message, "재료 부족 또는 제작대 필요.", sizeof(ack.message) - 1);
+    }
+    m_net.sendReliable(peerIdx, &ack, sizeof(ack));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1180,11 +1206,14 @@ void GameServer::resetRound() {
     spawnZombies();
     spawnLootBoxes();
     
-    // 5. 이전에는 클라이언트를 모두 끊었으나, 이제는 끊지 않고 다음 라운드 매칭을 대기할 수 있게 함
-    for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
-        // m_peerUsernames를 유지하면 로비 상태 그대로 유지 가능
-        // 만약 완전 초기화하려면 m_lobbyPlayers 등을 건드려야 하지만, 
-        // 클라이언트는 죽었을 때 로컬에서만 로비로 돌아가므로 연결을 유지함.
+    // 5. 연결된 피어만 빈 인벤토리로 재등록 (접속 유지 + 재접속 가능)
+    {
+        std::unordered_map<uint32_t, LobbyPlayer> fresh;
+        for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
+            if (m_net.isConnected(pi) && !m_peerUsernames[pi].empty())
+                fresh[pi] = { m_peerUsernames[pi], InventoryComponent{} };
+        }
+        m_lobbyPlayers = std::move(fresh);
     }
 }
 
@@ -1207,7 +1236,7 @@ void GameServer::broadcastTeamStatus() {
 // spawnNightWave — 밤 시작 시 플레이어들 주변에 웨이브 생성
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::spawnNightWave() {
-    int waveSize = 15 + m_activePlayers * 5; // 웨이브 좀비 수 대폭 하향 (너무 많아지는 것 방지)
+    int waveSize = 8 + m_activePlayers * 3; // 성능: 1인=11마리, 2인=14마리로 제한
     int spawned = 0;
     
     // 현재 살아있는 플레이어 수집
@@ -1350,21 +1379,21 @@ void GameServer::spawnLootBoxes() {
             if (roll < 45) return {{"food_can", ItemCategory::Consumable, 0.5f}, 2};
             if (roll < 70) return {{"plank", ItemCategory::BuildMaterial, 0.8f}, 3};
             if (roll < 85) return {{"scrap_metal", ItemCategory::BuildMaterial, 1.0f}, 2};
-            if (roll < 95) return {{"scrap_pipe", ItemCategory::Weapon, 2.0f}, 1};
+            if (roll < 95) return {{"scrap_pipe", ItemCategory::Weapon, 2.0f}, 20}; // 20 = 내구도
             return {{"medkit", ItemCategory::Consumable, 1.0f}, 1};
         } else if (theme == 1 || theme == 2) { // Commercial / Industrial
             if (roll < 15) return {{"bandage", ItemCategory::Consumable, 0.3f}, 3};
             if (roll < 35) return {{"scrap_metal", ItemCategory::BuildMaterial, 1.0f}, 3};
             if (roll < 50) return {{"plank", ItemCategory::BuildMaterial, 0.8f}, 3};
             if (roll < 65) return {{"oil", ItemCategory::BuildMaterial, 1.2f}, 2};
-            if (roll < 78) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
+            if (roll < 78) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, PISTOL_MAG_CAPACITY};
             if (roll < 92) return {{"ammo_9mm", ItemCategory::Ammo, 0.3f}, 30};
-            return {{"fire_axe", ItemCategory::Weapon, 3.0f}, 1};
+            return {{"fire_axe", ItemCategory::Weapon, 3.0f}, 12}; // 12 = 내구도
         } else { // Military
             if (roll < 15) return {{"medkit", ItemCategory::Consumable, 1.0f}, 2};
             if (roll < 35) return {{"electronic_part", ItemCategory::BuildMaterial, 0.5f}, 2};
             if (roll < 50) return {{"oil", ItemCategory::BuildMaterial, 1.2f}, 3};
-            if (roll < 68) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, 1};
+            if (roll < 68) return {{"pistol_9mm", ItemCategory::Weapon, 1.0f}, PISTOL_MAG_CAPACITY};
             if (roll < 90) return {{"ammo_9mm", ItemCategory::Ammo, 0.3f}, 45};
             return {{"flamethrower", ItemCategory::Weapon, 5.0f}, 1};
         }

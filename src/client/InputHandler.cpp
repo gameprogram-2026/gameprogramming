@@ -7,6 +7,8 @@ namespace dz {
 bool InputHandler::pollUI() {
     m_hasClick = false;
     m_hasMouseUp = false;
+    m_hasRightClick = false;
+    m_wheelDelta = 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { m_quit = true; }
@@ -31,9 +33,13 @@ bool InputHandler::pollUI() {
         if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
             m_hasClick = true; m_clickX = e.button.x; m_clickY = e.button.y;
         }
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_RIGHT) {
+            m_hasRightClick = true; m_rightClickX = e.button.x; m_rightClickY = e.button.y;
+        }
         if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
             m_hasMouseUp = true; m_mouseUpX = e.button.x; m_mouseUpY = e.button.y;
         }
+        if (e.type == SDL_MOUSEWHEEL) m_wheelDelta += e.wheel.y;
     }
     SDL_GetMouseState(&m_mouseX, &m_mouseY);
     return !m_quit;
@@ -42,6 +48,11 @@ bool InputHandler::pollUI() {
 bool InputHandler::consumeClick(int& x, int& y) noexcept {
     if (!m_hasClick) return false;
     x = m_clickX; y = m_clickY; m_hasClick = false; return true;
+}
+
+bool InputHandler::consumeRightClick(int& x, int& y) noexcept {
+    if (!m_hasRightClick) return false;
+    x = m_rightClickX; y = m_rightClickY; m_hasRightClick = false; return true;
 }
 
 bool InputHandler::consumeMouseUp(int& x, int& y) noexcept {
@@ -54,8 +65,10 @@ void InputHandler::mousePos(int& x, int& y) const noexcept {
 }
 
 bool InputHandler::poll(InputState& out, float playerScreenX, float playerScreenY) {
-    m_hasClick   = false;
-    m_hasMouseUp = false;
+    m_hasClick      = false;
+    m_hasMouseUp    = false;
+    m_hasRightClick = false;
+    m_wheelDelta    = 0;
 
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -93,9 +106,13 @@ bool InputHandler::poll(InputState& out, float playerScreenX, float playerScreen
         if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
             m_hasClick = true; m_clickX = e.button.x; m_clickY = e.button.y;
         }
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_RIGHT) {
+            m_hasRightClick = true; m_rightClickX = e.button.x; m_rightClickY = e.button.y;
+        }
         if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
             m_hasMouseUp = true; m_mouseUpX = e.button.x; m_mouseUpY = e.button.y;
         }
+        if (e.type == SDL_MOUSEWHEEL) m_wheelDelta += e.wheel.y;
     }
 
     // 이동: 이벤트 추적 배열 사용

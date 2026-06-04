@@ -17,7 +17,8 @@ Entity BuildSystem::tryBuild(World& world, TileMap& map,
                               uint32_t ownerTeam,
                               Entity   requester,
                               int tileX, int tileY,
-                              BuildingType type) {
+                              BuildingType type,
+                              uint8_t direction) {
     // ── Range check ───────────────────────────────────────────────────────────
     auto* xf = world.tryGet<TransformComponent>(requester);
     if (!xf) return Entity{NULL_ENTITY};
@@ -102,6 +103,7 @@ Entity BuildSystem::tryBuild(World& world, TileMap& map,
     auto& bld         = world.addComponent<BuildingComponent>(e);
     bld.type          = type;
     bld.ownerTeam     = static_cast<uint8_t>(ownerTeam);
+    bld.turretAngle   = (type == BuildingType::Turret) ? static_cast<float>(direction) * 90.0f : 0.0f;
     bld.tileX         = tileX;
     bld.tileY         = tileY;
     bld.maxHp         = (type == BuildingType::Workbench) ? 300.0f : (type == BuildingType::Barricade) ? 150.0f : 250.0f;
@@ -202,12 +204,23 @@ void BuildSystem::updateTurrets(World& world, float dt) {
 
             float dx = txf->x - xf->x, dy = txf->y - xf->y;
             float d  = std::sqrt(dx*dx + dy*dy);
-            if (d < nearDist) {
-                nearDist = d;
-                target   = e;
-                targetX  = txf->x;
-                targetY  = txf->y;
+            if (d > nearDist) continue;
+
+            // 사격 호(arc) 체크
+            if (bld.turretArcDeg < 355.0f) {
+                constexpr float PI = 3.14159265f;
+                float angleRad = bld.turretAngle * (PI / 180.0f);
+                float dirX =  std::sin(angleRad);
+                float dirY = -std::cos(angleRad);
+                float dot  = (dx * dirX + dy * dirY) / (d > 0.001f ? d : 0.001f);
+                float halfArc = bld.turretArcDeg * 0.5f * (PI / 180.0f);
+                if (std::acos(std::max(-1.0f, std::min(1.0f, dot))) > halfArc) continue;
             }
+
+            nearDist = d;
+            target   = e;
+            targetX  = txf->x;
+            targetY  = txf->y;
         }
 
         if (!target.isValid()) continue;

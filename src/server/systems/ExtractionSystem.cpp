@@ -145,6 +145,13 @@ PlayerExtractionState& ExtractionSystem::stateFor(uint32_t entityID) {
     return m_states[0].state;
 }
 
+const PlayerExtractionState* ExtractionSystem::stateOf(uint32_t netID) const {
+    for (const auto& entry : m_states) {
+        if (entry.entityID == netID) return &entry.state;
+    }
+    return nullptr;
+}
+
 float ExtractionSystem::channelProgress(uint32_t netID) const {
     for (const auto& entry : m_states) {
         if (entry.entityID == netID)

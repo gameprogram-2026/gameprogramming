@@ -30,6 +30,8 @@ struct BuildingComponent {
     float  turretDamage       = 20.0f;
     float  turretCooldown     = 0.0f;
     uint32_t turretTargetID   = 0;
+    float  turretAngle        = 0.0f;   ///< Facing angle (deg): 0=북 90=동 180=남 270=서
+    float  turretArcDeg       = 90.0f;  ///< 사격 호 (±45°)
 
     // ── Explosion (turret on fire) ────────────────────────────────────────────
     float  explosionRadius    = 192.0f; // px = 6 tiles

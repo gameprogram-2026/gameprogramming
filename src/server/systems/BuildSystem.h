@@ -28,7 +28,8 @@ public:
                     uint32_t ownerTeam,
                     Entity   requester,
                     int      tileX, int tileY,
-                    BuildingType type);
+                    BuildingType type,
+                    uint8_t  direction = 0);  ///< 0=N 1=E 2=S 3=W (포탑 전용)
 
     /// Instantly destroy a building (called by FireSystem or combat).
     void destroyBuilding(World& world, TileMap& map, Entity building);

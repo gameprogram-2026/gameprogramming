@@ -43,6 +43,8 @@ public:
 
     void shutdown();
 
+    bool isConnected() const noexcept { return m_conn != nullptr; }
+
     // ── Account management ─────────────────────────────────────────────────
     /// Returns false if the username already exists.
     bool registerAccount(const std::string& username,

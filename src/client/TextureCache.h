@@ -21,9 +21,15 @@ public:
     bool loadFromSheet(const std::string& key, const std::string& sheetPath,
                        int cellW, int cellH, int col, int row);
 
-    /// Load all item icons from the two pre-generated sprite sheets.
-    /// Must be called after init().
+    /// Load all item icons from sheet_items.png
     void loadItemIcons();
+    /// Load world sprites (tiles, characters, props) from sheet_world.png
+    void loadWorldSprites();
+    /// Load character animation frames (player + 3 zombie types)
+    void loadCharacterSprites();
+    /// Slice using explicit pixel rect (for non-uniform grids)
+    bool loadFromRect(const std::string& key, const std::string& sheetPath,
+                      int srcX, int srcY, int srcW, int srcH);
 
     /// Returns texture or nullptr if not found.
     SDL_Texture* get(const std::string& key) const noexcept;

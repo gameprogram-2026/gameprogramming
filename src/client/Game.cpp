@@ -533,12 +533,15 @@ void Game::runDead() {
         m_deathTimer -= dt;
 
         if (m_deathTimer <= 0.0f) {
-            // 인벤토리 중 장비/소지품만 초기화 (창고는 유지)
             m_net.clearLocalNetID();
             for (auto& slot : m_inventory.gridSlots) slot = {};
             m_inventory.primaryWeapon = {};
             m_inventory.secondaryWeapon = {};
             m_inventory.usedSlots = 0;
+            m_buildMode     = false;
+            m_showInventory = false;
+            m_showCrafting  = false;
+            m_drag          = DragState{};
             m_state      = GameState::Lobby;
             m_statusMsg  = "사망 — 모든 아이템을 잃고 로비로 돌아왔습니다.";
             return;
@@ -687,6 +690,34 @@ void Game::useConsumable(int gridIdx) {
 // 인벤토리 마우스 — 드래그 앤 드롭 처리
 // ─────────────────────────────────────────────────────────────────────────────
 void Game::processInventoryMouse() {
+    // ── 우클릭: 건축 재료 → 건설 모드 진입 (인게임 전용) ──────────────────────
+    {
+        int rx, ry;
+        if (m_state == GameState::InGame && m_input.consumeRightClick(rx, ry)) {
+            DragState::Src src; int gidx;
+            if (hitTestInventorySlot(rx, ry, src, gidx) && src == DragState::Src::Grid
+                && gidx >= 0 && gidx < 20) {
+                const InventoryItem& it = m_inventory.gridSlots[gidx];
+                int btype = -1;
+                if (it.isValid()) {
+                    if (it.name == "scrap_metal") btype = 0; // 바리케이드
+                    else if (it.name == "electronic_part") btype = 1; // 포탑
+                    else if (it.name == "plank") btype = 2; // 제작대
+                }
+                if (btype >= 0) {
+                    static const char* names[] = {"바리케이드","포탑","제작대"};
+                    m_buildMode = true;
+                    m_buildType = btype;
+                    m_showInventory = false;
+                    m_drag = DragState{};
+                    m_notifyMsg = std::string(names[btype]) + " — 클릭으로 설치";
+                    m_notifyTimer = 2.0f;
+                    return;
+                }
+            }
+        }
+    }
+
     // ── 드래그 시작 (마우스 다운) ─────────────────────────────────────────────
     if (!m_drag.active) {
         int cx, cy;
@@ -801,6 +832,14 @@ void Game::processCraftingMouse() {
     const int PAD = 12;
     const int BTN_W = 100, BTN_H = 46;
 
+    // 클리핑 영역 밖 클릭 무시
+    const int contentTop    = boxY + 66;
+    const int contentBottom = boxY + CH - 32;
+    if (mouseY < contentTop || mouseY >= contentBottom) return;
+
+    // 스크롤 오프셋 반영하여 실제 레시피 좌표 계산
+    const int adjustedY = mouseY + m_craftScroll;
+
     auto countItem = [&](const char* key) {
         int cnt = 0;
         for (const auto& slot : m_inventory.gridSlots) {
@@ -809,7 +848,7 @@ void Game::processCraftingMouse() {
         return cnt;
     };
 
-    int recipeY = boxY + 66;
+    int recipeY = boxY + 66 - m_craftScroll; // 스크롤 오프셋 반영
     for (int ri = 0; ri < CRAFT_RECIPE_COUNT; ++ri) {
         const CraftingRecipe& rec = CRAFT_RECIPES[ri];
         bool canCraft = true;
@@ -856,8 +895,13 @@ void Game::processEvents() {
             m_drag = DragState{};
         } else if (m_showCrafting) {
             m_showCrafting = false;
+            m_craftScroll  = 0;
+        } else if (m_buildMode) {
+            m_buildMode = false;
+            m_notifyMsg   = "건설 취소";
+            m_notifyTimer = 1.0f;
         } else {
-            m_notifyMsg = "생존 지역을 통해 탈출해야 로비로 돌아갈 수 있습니다.";
+            m_notifyMsg = "탈출존에서 F키를 눌러 탈출하세요.";
             m_notifyTimer = 3.0f;
         }
         return;
@@ -866,6 +910,15 @@ void Game::processEvents() {
     if (m_showInventory) {
         processInventoryMouse();
     } else if (m_showCrafting) {
+        // 마우스 휠 스크롤
+        int wheel = m_input.consumeWheel();
+        if (wheel != 0) {
+            constexpr int ROW_H = 76;
+            constexpr int MAX_SCROLL = (CRAFT_RECIPE_COUNT - 4) * ROW_H;
+            m_craftScroll -= wheel * ROW_H;
+            if (m_craftScroll < 0) m_craftScroll = 0;
+            if (m_craftScroll > MAX_SCROLL) m_craftScroll = MAX_SCROLL;
+        }
         processCraftingMouse();
     }
 
@@ -886,23 +939,44 @@ void Game::processEvents() {
         return;
     }
 
-    static bool prevB = false;
-    bool curB = m_input.isKeyDown(SDL_SCANCODE_B);
-    if (curB && !prevB) {
-        m_buildMode = !m_buildMode;
-        m_notifyMsg   = m_buildMode ? "건설 모드 ON - 클릭으로 설치" : "건설 모드 OFF";
-        m_notifyTimer = 2.0f;
-    }
-    prevB = curB;
+    // Z/X/C 키로 건설 유형 직접 선택 — 같은 키 다시 누르면 취소
+    static bool prevZ = false, prevX = false, prevC = false;
+    bool curZ = m_input.isKeyDown(SDL_SCANCODE_Z);
+    bool curX = m_input.isKeyDown(SDL_SCANCODE_X);
+    bool curC = m_input.isKeyDown(SDL_SCANCODE_C);
 
-    static bool prevV = false;
-    bool curV = m_input.isKeyDown(SDL_SCANCODE_V);
-    if (curV && !prevV && m_buildMode) {
-        m_buildType = (m_buildType + 1) % 3;
-        m_notifyMsg   = m_buildType == 0 ? "건설: 바리케이드" : m_buildType == 1 ? "건설: 포탑" : "건설: 제작대";
+    auto enterBuild = [&](int type) {
+        static const char* names[] = {"바리케이드 (Z)", "포탑 (X)", "제작대 (C)"};
+        static const char* dirs[]  = {"북", "동", "남", "서"};
+        if (m_buildMode && m_buildType == type) {
+            m_buildMode = false;
+            m_notifyMsg = "건설 취소";
+        } else {
+            m_buildMode = true;
+            m_buildType = type;
+            if (type == 1) // 포탑
+                m_notifyMsg = std::string("포탑 (X) ") + dirs[m_turretDir] + "향 — R: 회전 / 클릭: 설치";
+            else
+                m_notifyMsg = std::string(names[type]) + " — 클릭으로 설치 / 다시 누르면 취소";
+        }
+        m_notifyTimer = 2.0f;
+    };
+
+    // R키 — 포탑 방향 회전 (포탑 모드일 때만)
+    static bool prevR = false;
+    bool curR = m_input.isKeyDown(SDL_SCANCODE_R);
+    if (curR && !prevR && m_buildMode && m_buildType == 1) {
+        static const char* dirs[] = {"북", "동", "남", "서"};
+        m_turretDir = (m_turretDir + 1) % 4;
+        m_notifyMsg   = std::string("포탑 방향: ") + dirs[m_turretDir];
         m_notifyTimer = 1.5f;
     }
-    prevV = curV;
+    prevR = curR;
+
+    if (curZ && !prevZ) enterBuild(0);
+    if (curX && !prevX) enterBuild(1);
+    if (curC && !prevC) enterBuild(2);
+    prevZ = curZ; prevX = curX; prevC = curC;
 
     if (m_buildMode) {
         m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE | ACT_RELOAD);
@@ -910,9 +984,10 @@ void Game::processEvents() {
         if (m_input.consumeClick(cx, cy)) {
             float wx = (cx - m_camera.screenW * 0.5f) / m_camera.zoom + m_camera.x;
             float wy = (cy - m_camera.screenH * 0.5f) / m_camera.zoom + m_camera.y;
-            m_net.sendBuildPlace(static_cast<int16_t>(wx / 32.0f),
-                                 static_cast<int16_t>(wy / 32.0f),
-                                 static_cast<uint8_t>(m_buildType));
+            m_net.sendBuildPlace(static_cast<int16_t>(wx / TILE_SIZE),
+                                 static_cast<int16_t>(wy / TILE_SIZE),
+                                 static_cast<uint8_t>(m_buildType),
+                                 static_cast<uint8_t>(m_buildType == 1 ? m_turretDir : 0));
         }
         return;
     }
@@ -1116,6 +1191,13 @@ void Game::update(float dt) {
     }
     m_prevM = currM;
 
+    // 캐릭터 이동 방향 추적 (WASD 기준)
+    if (m_curInput.moveX > 0.1f)       { m_charDir = 2; m_charMoving = true; }
+    else if (m_curInput.moveX < -0.1f) { m_charDir = 3; m_charMoving = true; }
+    else if (m_curInput.moveY < -0.1f) { m_charDir = 1; m_charMoving = true; }
+    else if (m_curInput.moveY > 0.1f)  { m_charDir = 0; m_charMoving = true; }
+    else                               { m_charMoving = false; }
+
     // 발자국 소리 재생
     if (m_curInput.moveX != 0 || m_curInput.moveY != 0) {
         float stepInterval = (m_curInput.actions & ACT_SPRINT) ? 0.25f : 0.4f;
@@ -1281,8 +1363,9 @@ void Game::renderIngame() {
             v.wy = rem.snap[1].y;
             v.looted = false; 
             v.nearPlayer = (rem.entityID == m_nearestInteractNetID);
-            v.isBuilding = (rem.recType == REC_BUILDING);
-            v.buildingType = rem.snap[1].statusFlags; // Assuming we can use statusFlags for buildingType?
+            v.isBuilding   = (rem.recType == REC_BUILDING);
+            v.buildingType = rem.snap[1].statusFlags & 0x0F;        // bits0-3: 건물 유형
+            v.turretDir    = (rem.snap[1].statusFlags >> 4) & 0x03; // bits4-5: 포탑 방향
             views.push_back(v);
         }
     }
@@ -1317,7 +1400,8 @@ void Game::renderIngame() {
                                   m_net.localX(), m_net.localY(),
                                   m_curInput.aimAngle, hpPct, bleeding || onFire,
                                   teamID, wName, wGrade,
-                                  m_attackTimer, m_attackAngle);
+                                  m_attackTimer, m_attackAngle,
+                                  m_charDir, m_charMoving);
 
     // 5-b. 시야각 안개 (120도, 마우스 방향)
     m_renderer.drawFOV(m_net.localX(), m_net.localY(),
@@ -1335,6 +1419,12 @@ void Game::renderIngame() {
         m_zonesOpen = true;
         m_extractCountdown = 0.0f;
         m_audio.playSound("siren", 0.8f, false);
+    }
+
+    // 건설 결과 알림
+    if (m_net.hasBuildMsg()) {
+        m_notifyMsg   = m_net.consumeBuildMsg();
+        m_notifyTimer = 2.5f;
     }
     // 6. HUD
     static const char* teamNames[] = {"NEUTRAL","ALPHA","BRAVO","CHARLIE","DELTA"};
@@ -1357,7 +1447,7 @@ void Game::renderIngame() {
     // 7-b. 건설 모드 오버레이
     {
         int mx, my; m_input.mousePos(mx, my);
-        m_renderer.drawBuildModeOverlay(m_buildMode, m_buildType, mx, my, m_camera);
+        m_renderer.drawBuildModeOverlay(m_buildMode, m_buildType, mx, my, m_camera, m_turretDir);
         if (m_buildMode) {
             m_renderer.drawBuildRecipePanel(m_inventory, m_buildType);
         }
@@ -1395,7 +1485,7 @@ void Game::renderIngame() {
         int mx, my;
         m_input.mousePos(mx, my);
         int clickedRecipe = -1;
-        m_renderer.drawCraftingUI(m_inventory, mx, my, clickedRecipe);
+        m_renderer.drawCraftingUI(m_inventory, mx, my, clickedRecipe, m_craftScroll);
     } else if (m_showFullMap) {
         m_renderer.drawFullMap(m_map, m_net, m_net.localX(), m_net.localY(), teamID, m_extractionZones);
     }

@@ -47,7 +47,7 @@ private:
     void onAllianceChanged(uint8_t teamA, uint8_t teamB, bool active);
     void onUseItem(uint32_t peerIdx, const char* key);
     void onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam);
-    void onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType);
+    void onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction = 0);
     void onCraftRequest(uint32_t peerIdx, uint8_t recipeID);
     void onLootPickupReq(uint32_t peerIdx, uint32_t lootNetID);
     void onSelectWeaponReq(uint32_t peerIdx, uint8_t slot);
