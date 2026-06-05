@@ -597,6 +597,8 @@ void Game::runDead() {
             m_inventory.primaryWeapon = {};
             m_inventory.secondaryWeapon = {};
             m_inventory.usedSlots = 0;
+            m_inventory.totalWeight = 0.0f;
+            m_hotbarSelected = 0;
             m_buildMode     = false;
             m_showInventory = false;
             m_showCrafting  = false;
@@ -1275,9 +1277,6 @@ void Game::processEvents() {
                     m_hotbarSelected = 1;
                     m_net.sendSelectWeapon(1);
                     m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
-                } else {
-                    m_hotbarSelected = i;
-                    useConsumable(hotbarConsIdx[0]);
                 }
             } else {
                 // 키 3-5: 사용 아이템

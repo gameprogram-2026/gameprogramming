@@ -177,8 +177,14 @@ void GameLogic::handleFlamethrowerBurst(uint32_t ownerID, float aimAngle) {
     float dirX =  std::sin(rad);
     float dirY = -std::cos(rad);
 
-    for (float dist : {48.0f, 80.0f, 112.0f, 144.0f}) {
-        m_fire.igniteAtWorld(xf->x + dirX * dist, xf->y + dirY * dist);
+    const float sideX = dirY;
+    const float sideY = -dirX;
+    for (float dist : {40.0f, 72.0f, 104.0f, 136.0f, 168.0f}) {
+        const float spread = 10.0f + dist * 0.18f;
+        for (float side : {-spread, 0.0f, spread}) {
+            m_fire.igniteAtWorld(xf->x + dirX * dist + sideX * side,
+                                 xf->y + dirY * dist + sideY * side);
+        }
     }
 
     cbt->fireCooldown = 0.25f;

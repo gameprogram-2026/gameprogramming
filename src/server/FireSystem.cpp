@@ -7,6 +7,7 @@
 #include "shared/util/Logger.h"
 #include <array>
 #include <algorithm>
+#include <cmath>
 
 namespace dz {
 
@@ -36,6 +37,10 @@ void FireSystem::reset() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 void FireSystem::update(World& world, TileMap& map, float dt) {
+    for (const auto& tile : m_tiles) {
+        checkBuildingContact(world, map, tile.tx, tile.ty);
+    }
+
     // ── Decay tile TTL ────────────────────────────────────────────────────────
     for (auto& tile : m_tiles) tile.ttl -= dt;
     m_tiles.erase(
@@ -102,8 +107,9 @@ void FireSystem::checkBuildingContact(World& world, TileMap& map,
     if (!map.inBounds(tx, ty)) return;
     const Tile& tile = map.at(tx, ty);
     if (!tile.isOccupied() || tile.entityID == 0) return;
+    const uint32_t buildingID = tile.entityID;
 
-    Entity buildingEntity{tile.entityID};
+    Entity buildingEntity{buildingID};
     auto* bld = world.tryGet<BuildingComponent>(buildingEntity);
     if (!bld || bld->isDestroyed) return;
 
@@ -112,11 +118,11 @@ void FireSystem::checkBuildingContact(World& world, TileMap& map,
 
     if (bld->isBarricade()) {
         DZ_LOG_INFO("[Fire] Barricade %u burned at tile (%d,%d)",
-                    tile.entityID, tx, ty);
-        if (m_onDestroy) m_onDestroy(tile.entityID, false);
+                    buildingID, tx, ty);
+        if (m_onDestroy) m_onDestroy(buildingID, false);
     } else if (bld->isTurret()) {
         DZ_LOG_INFO("[Fire] Turret %u exploded at tile (%d,%d) — oil blast",
-                    tile.entityID, tx, ty);
+                    buildingID, tx, ty);
         // Ignite tiles within explosion radius to simulate oil spread
         float wx = TileMap::tileCentre(tx);
         float wy = TileMap::tileCentre(ty);
@@ -125,7 +131,7 @@ void FireSystem::checkBuildingContact(World& world, TileMap& map,
             for (int ey = -blastTiles; ey <= blastTiles; ++ey)
                 igniteTile(static_cast<int16_t>(tx + ex),
                             static_cast<int16_t>(ty + ey));
-        if (m_onDestroy) m_onDestroy(tile.entityID, true); // explosion=true
+        if (m_onDestroy) m_onDestroy(buildingID, true); // explosion=true
         (void)wx; (void)wy;
     }
     world.destroyEntity(buildingEntity);
@@ -149,7 +155,22 @@ void FireSystem::applyEntityDamage(World& world, const TileMap& /*map*/, float d
         int16_t tx = static_cast<int16_t>(TileMap::worldToTile(xf.x));
         int16_t ty = static_cast<int16_t>(TileMap::worldToTile(xf.y));
 
-        bool onFire = isBurning(tx, ty);
+        bool onFire = false;
+        for (int ox = -1; ox <= 1 && !onFire; ++ox) {
+            for (int oy = -1; oy <= 1; ++oy) {
+                const int16_t ntx = static_cast<int16_t>(tx + ox);
+                const int16_t nty = static_cast<int16_t>(ty + oy);
+                if (!isBurning(ntx, nty)) continue;
+                const float cx = TileMap::tileCentre(ntx);
+                const float cy = TileMap::tileCentre(nty);
+                const float dx = xf.x - cx;
+                const float dy = xf.y - cy;
+                if (dx * dx + dy * dy <= (TILE_SIZE * 0.95f) * (TILE_SIZE * 0.95f)) {
+                    onFire = true;
+                    break;
+                }
+            }
+        }
         if (onFire && !cbt->isOnFire) {
             cbt->isOnFire        = true;
             cbt->fireDamageTimer = 0.0f;

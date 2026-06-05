@@ -206,15 +206,15 @@ bool Database::registerAccount(const std::string& username,
     // Give basic starter items in Stash
     // is_equipped = 2 means Stash
     // pistol_9mm: id=4, cat=1
-    // ammo_9mm: id=10, cat=4
-    // medkit: id=30, cat=5
-    // food_can: id=32, cat=5
+    // ammo_9mm: id=10, cat=2
+    // medkit: id=30, cat=3
+    // food_can: id=32, cat=3
     std::string sqlStarterItems =
         std::string("INSERT IGNORE INTO inventory (username, slot_index, is_equipped, item_id, item_key, category, quantity, weight) VALUES ") +
         "('" + escUser.data() + "', 0, 2, 4, 'pistol_9mm', 1, " + std::to_string(PISTOL_MAG_CAPACITY) + ", 1.0), " +
-        "('" + escUser.data() + "', 1, 2, 10, 'ammo_9mm', 4, 30, 0.3), " +
-        "('" + escUser.data() + "', 2, 2, 30, 'medkit', 5, 1, 1.0), " +
-        "('" + escUser.data() + "', 3, 2, 32, 'food_can', 5, 2, 0.4)";
+        "('" + escUser.data() + "', 1, 2, 10, 'ammo_9mm', 2, 30, 0.3), " +
+        "('" + escUser.data() + "', 2, 2, 30, 'medkit', 3, 1, 1.0), " +
+        "('" + escUser.data() + "', 3, 2, 32, 'food_can', 3, 2, 0.4)";
     query(sqlStarterItems);
 
     DZ_LOG_INFO("[DB] Account created with starter items: %s", username.c_str());

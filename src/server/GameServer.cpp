@@ -928,11 +928,16 @@ void GameServer::onDeathLoot(Entity player) {
     inv->equipped[0] = {}; // PrimaryWeapon
     dropItem(inv->equipped[1]);
     inv->equipped[1] = {}; // SecondaryWeapon
-    inv->usedSlots = 0;
+    inv->recalculateGridStats();
 
     auto* net = m_world.tryGet<NetworkComponent>(player);
     if (net && m_lobbyPlayers.find(net->ownerID) != m_lobbyPlayers.end()) {
         m_lobbyPlayers[net->ownerID].inv = *inv;
+        if (!m_peerUsernames[net->ownerID].empty()) {
+            m_db.saveAccount(m_peerUsernames[net->ownerID], *inv);
+        }
+        sendInventorySyncToPeer(net->ownerID);
+        sendStashSyncToPeer(net->ownerID);
     }
 }
 
