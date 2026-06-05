@@ -628,6 +628,28 @@ void GameServer::onJoinMatch(uint32_t peerIdx) {
         inv.removeItem(0);
     }
 
+    // ── 테스트용 스태시 초기 지급 (스태시가 비어 있을 때만) ──────────────────
+    bool stashEmpty = true;
+    for (int i = 0; i < 40; ++i) { if (inv.stash[i].isValid()) { stashEmpty = false; break; } }
+    if (stashEmpty) {
+        auto makeItem = [](uint32_t id, const char* key, ItemCategory cat, int qty, float w) {
+            Item it; it.itemID = id; it.key = key; it.category = cat;
+            it.quantity = qty; it.weight = w; return it;
+        };
+        int s = 0;
+        inv.stash[s++] = makeItem(10, "ammo_9mm",        ItemCategory::Ammo,          90, 0.1f);
+        inv.stash[s++] = makeItem( 7, "smg_9mm",         ItemCategory::Weapon,        30, 2.0f);
+        inv.stash[s++] = makeItem( 6, "flamethrower",    ItemCategory::Weapon,         1, 5.0f);
+        inv.stash[s++] = makeItem( 5, "molotov",         ItemCategory::Throwable,      5, 0.5f);
+        inv.stash[s++] = makeItem(20, "scrap_metal",     ItemCategory::BuildMaterial, 30, 1.0f);
+        inv.stash[s++] = makeItem(21, "plank",           ItemCategory::BuildMaterial, 20, 1.2f);
+        inv.stash[s++] = makeItem(22, "electronic_part", ItemCategory::BuildMaterial, 10, 0.5f);
+        inv.stash[s++] = makeItem(23, "oil",             ItemCategory::BuildMaterial, 10, 0.8f);
+        inv.stash[s++] = makeItem(30, "medkit",          ItemCategory::Consumable,     5, 1.0f);
+        inv.stash[s++] = makeItem(31, "bandage",         ItemCategory::Consumable,    10, 0.2f);
+    }
+    // ── 테스트용 스태시 끝 ────────────────────────────────────────────────────
+
     auto& net = m_world.addComponent<NetworkComponent>(e);
     net.netID  = netID;
     net.ownerID= peerIdx;
