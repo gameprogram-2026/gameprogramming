@@ -161,6 +161,7 @@ public:
     void spawnMeleeArc(float x, float y, float angle);
     void spawnBloodStain(float x, float y);
     void spawnHealEffect(float x, float y);
+    void spawnFlameEffect(float x, float y, float angle);
     void spawnSoundRing(float x, float y, float maxRadius, SDL_Color color);
     void updateSoundRings(float dt);
     void drawSoundRings(const Camera& cam);

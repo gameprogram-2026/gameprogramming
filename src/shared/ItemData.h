@@ -73,7 +73,7 @@ static const int ITEM_META_COUNT = static_cast<int>(sizeof(ITEM_META) / sizeof(I
 // ─────────────────────────────────────────────────────────────────────────────
 static const CraftingRecipe CRAFT_RECIPES[] = {
     // id, resultKey, resultQty, ingredients[], ingredientCount, requiresWorkbench, displayName
-    {0,  "molotov",          1,  {{"oil",1},{"wood",1},{"",0},{"",0}},              2, false, "화염병 제작"},
+    {0,  "molotov",          1,  {{"oil",1},{"plank",1},{"",0},{"",0}},             2, false, "화염병 제작"},
     {1,  "bandage",          2,  {{"food_can",1},{"",0},{"",0},{"",0}},             1, false, "붕대 제작"},
     {2,  "medkit",           1,  {{"bandage",3},{"oil",1},{"",0},{"",0}},           2, false, "구급 상자 제작"},
     {3,  "ammo_9mm",         14, {{"scrap_metal",1},{"",0},{"",0},{"",0}},          1, true,  "9mm 탄 제작"},

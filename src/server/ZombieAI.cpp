@@ -50,9 +50,27 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         const auto& doors = m_map->getDoors();
         const uint16_t doorID = static_cast<uint16_t>(ai.targetDoorID);
         if (doorID < doors.size() && !doors[doorID].open && !doors[doorID].broken) {
-            ai.targetX = TileMap::tileCentre(doors[doorID].tx);
-            ai.targetY = TileMap::tileCentre(doors[doorID].ty);
-            doorTargetActive = true;
+            float doorX = TileMap::tileCentre(doors[doorID].tx);
+            float doorY = TileMap::tileCentre(doors[doorID].ty);
+            float ddx = doorX - xf->x, ddy = doorY - xf->y;
+            float doorDist2 = ddx*ddx + ddy*ddy;
+
+            // 플레이어가 문보다 더 가까우면 문 타겟 해제 (플레이어 우선)
+            Entity nearest = findNearestEnemy(world, zombie);
+            bool playerCloser = false;
+            if (nearest.isValid()) {
+                auto* nxf = world.tryGet<TransformComponent>(nearest);
+                if (nxf) {
+                    float pdx = nxf->x - xf->x, pdy = nxf->y - xf->y;
+                    if (pdx*pdx + pdy*pdy < doorDist2) playerCloser = true;
+                }
+            }
+
+            if (!playerCloser) {
+                ai.targetX = doorX;
+                ai.targetY = doorY;
+                doorTargetActive = true;
+            }
         } else {
             ai.targetDoorID = -1;
         }

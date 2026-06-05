@@ -1324,6 +1324,7 @@ void Game::processEvents() {
                 } else if (isFlamethrower) {
                     m_cameraShakeTimer = 0.08f;
                     m_cameraShakeIntensity = 2.0f;
+                    m_renderer.spawnFlameEffect(m_net.localX(), m_net.localY(), m_attackAngle);
                 } else {
                     m_audio.playSound("swing", 0.8f);
                     m_cameraShakeTimer = 0.1f;

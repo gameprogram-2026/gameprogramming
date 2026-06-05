@@ -3811,6 +3811,47 @@ void Renderer::spawnHealEffect(float x, float y) {
     }
 }
 
+void Renderer::spawnFlameEffect(float x, float y, float angle) {
+    constexpr float PI = 3.14159265f;
+    float rad = angle * PI / 180.0f;
+    float fwdX = std::sin(rad), fwdY = -std::cos(rad);
+
+    for (int i = 0; i < 18; ++i) {
+        Particle p;
+        float spread = angle + static_cast<float>(rand() % 60 - 30);
+        float sr = spread * PI / 180.0f;
+        float dist = 20.0f + static_cast<float>(rand() % 120);
+        p.x = x + std::sin(sr) * dist;
+        p.y = y - std::cos(sr) * dist;
+        float speed = 80.0f + static_cast<float>(rand() % 120);
+        p.vx = std::sin(sr) * speed;
+        p.vy = -std::cos(sr) * speed;
+        p.life = p.maxLife = 0.08f + static_cast<float>(rand() % 15) / 100.0f;
+        // 오렌지→노란색 랜덤
+        int variant = rand() % 3;
+        if (variant == 0)      p.color = {255, 80,  20, 230};
+        else if (variant == 1) p.color = {255, 150, 30, 220};
+        else                   p.color = {255, 220, 60, 200};
+        p.size = 3.0f + static_cast<float>(rand() % 5);
+        m_particles.push_back(p);
+    }
+    // 연기 파티클
+    for (int i = 0; i < 5; ++i) {
+        Particle p;
+        float spread = angle + static_cast<float>(rand() % 40 - 20);
+        float sr = spread * PI / 180.0f;
+        float dist = 60.0f + static_cast<float>(rand() % 80);
+        p.x = x + std::sin(sr) * dist;
+        p.y = y - std::cos(sr) * dist;
+        p.vx = fwdX * 30.0f + static_cast<float>(rand() % 40 - 20);
+        p.vy = fwdY * 30.0f - static_cast<float>(rand() % 30);
+        p.life = p.maxLife = 0.2f + static_cast<float>(rand() % 20) / 100.0f;
+        p.color = {60, 55, 50, 120};
+        p.size = 5.0f + static_cast<float>(rand() % 6);
+        m_particles.push_back(p);
+    }
+}
+
 void Renderer::spawnSoundRing(float x, float y, float maxRadius, SDL_Color color) {
     SoundRing r;
     r.x = x; r.y = y;
