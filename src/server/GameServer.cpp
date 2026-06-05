@@ -168,6 +168,11 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
         m_net.broadcastReliable(&pkt, sizeof(pkt));
     });
 
+    m_net.onFireThrow([this](uint32_t peerIdx, float x, float y) {
+        if (!m_gameStarted) return;
+        m_logic->handleFireThrow(peerIdx, x, y);
+    });
+
     m_running = true;
 }
 
@@ -1166,8 +1171,13 @@ void GameServer::spawnZombies() {
             int usableH = std::max(1, bd.h - insetY * 2);
             float bx = TileMap::tileCentre(bd.x + insetX + (std::rand() % usableW));
             float by = TileMap::tileCentre(bd.y + insetY + (std::rand() % usableH));
-            ZombieType type = (std::rand() % 10 < 2) ? ZombieType::Runner : ZombieType::Shambler;
-            spawns.push_back({bx, by, type, type == ZombieType::Runner ? 40.f : 60.f});
+            int roll = std::rand() % 20;
+            ZombieType type = (roll == 0)   ? ZombieType::Brute    // 5%
+                            : (roll < 5)    ? ZombieType::Runner   // 20%
+                            :                 ZombieType::Shambler; // 75%
+            float hp = (type == ZombieType::Brute) ? 200.f
+                     : (type == ZombieType::Runner) ? 40.f : 60.f;
+            spawns.push_back({bx, by, type, hp});
         }
     }
 

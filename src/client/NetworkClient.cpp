@@ -647,6 +647,18 @@ void NetworkClient::sendUseItem(const char* key) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// sendFireThrow — 화염병 투척 요청 (신뢰 채널)
+// ─────────────────────────────────────────────────────────────────────────────
+void NetworkClient::sendFireThrow(float targetX, float targetY) {
+    if (!m_peer) return;
+    FireThrowPacket pkt{};
+    pkt.packetType = static_cast<uint8_t>(PacketType::C2S_FireThrow);
+    pkt.targetX    = targetX;
+    pkt.targetY    = targetY;
+    ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(m_peer, CHAN_RELIABLE, ep);
+}
+
 // sendAlliancePropose — 연합 제안 (신뢰 채널)
 // ─────────────────────────────────────────────────────────────────────────────
 void NetworkClient::sendAlliancePropose(uint8_t toTeam) {

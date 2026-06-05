@@ -1260,14 +1260,29 @@ void Game::processEvents() {
     const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
     const bool isSMG = hasWeapon && activeWeapon.name == "smg_9mm";
     const bool isFlamethrower = hasWeapon && activeWeapon.name == "flamethrower";
+    const bool isMolotov = hasWeapon && activeWeapon.name == "molotov";
     const bool isRanged = isPistol || isSMG || isFlamethrower;
     if (!isPistol && !isSMG) {
         m_curInput.actions &= ~ACT_RELOAD;
     }
 
+    // 화염병 투척 처리 (서버에 C2S_FireThrow 전송)
+    if (isMolotov && (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) && m_attackTimer <= 0.0f) {
+        m_attackTimer = 1.2f;
+        constexpr float THROW_DIST = 180.0f;
+        float rad = m_curInput.aimAngle * (3.14159265f / 180.0f);
+        float tx  = m_net.localX() + std::sin(rad) * THROW_DIST;
+        float ty  = m_net.localY() - std::cos(rad) * THROW_DIST;
+        m_net.sendFireThrow(tx, ty);
+        m_renderer.spawnSoundRing(tx, ty, 400.0f, {255, 80, 0, 200});
+        m_cameraShakeTimer     = 0.12f;
+        m_cameraShakeIntensity = 4.0f;
+        m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+    }
+
     if (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) {
         const auto& wpn = activeWeapon;
-        if (!hasWeapon) {
+        if (!hasWeapon || isMolotov) {
             m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
         } else {
             if (isRanged) {

@@ -43,6 +43,7 @@ public:
     using ItemDropCB     = std::function<void(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint16_t quantity)>;
     using DismantleCB    = std::function<void(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx)>;
     using AuthHandler    = std::function<void(uint32_t peerIdx, const char* user, const char* pass, bool isRegister)>;
+    using FireThrowCB    = std::function<void(uint32_t peerIdx, float x, float y)>;
 
     using JoinHandler    = std::function<void(uint32_t peerIdx)>;
     using StashTransferCB = std::function<void(uint32_t peerIdx, uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx)>;
@@ -92,6 +93,7 @@ public:
     void onLootPickup(LootPickupCB cb)   { m_onLootPickup = std::move(cb); }
     void onItemDrop(ItemDropCB cb)        { m_onItemDrop = std::move(cb); }
     void onDismantle(DismantleCB cb)      { m_onDismantle = std::move(cb); }
+    void onFireThrow(FireThrowCB cb)      { m_onFireThrow = std::move(cb); }
 
     const PeerInfo& peer(uint32_t idx) const { return m_peers[idx]; }
     int  connectedCount() const;
@@ -119,6 +121,7 @@ private:
     LootPickupCB    m_onLootPickup;
     ItemDropCB      m_onItemDrop;
     DismantleCB     m_onDismantle;
+    FireThrowCB     m_onFireThrow;
 
     uint32_t assignPeerSlot(ENetPeer* peer);
     void     handlePacket(uint32_t peerIdx, const uint8_t* data, size_t len);
