@@ -1297,6 +1297,8 @@ void Game::processEvents() {
                     m_cameraShakeIntensity = isSMG ? 3.0f : 6.0f;
                     m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
                     m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
+                    float ringR = isSMG ? 560.0f : 400.0f;
+                    m_renderer.spawnSoundRing(m_net.localX(), m_net.localY(), ringR, {255, 160, 40, 180});
                 } else if (isFlamethrower) {
                     m_cameraShakeTimer = 0.08f;
                     m_cameraShakeIntensity = 2.0f;
@@ -1425,6 +1427,10 @@ void Game::update(float dt) {
         if (m_footstepTimer >= stepInterval) {
             m_audio.playSound("footstep", 0.6f);
             m_footstepTimer -= stepInterval;
+            bool sprinting = (m_curInput.actions & ACT_SPRINT) != 0;
+            float fRadius = sprinting ? 160.0f : 48.0f;
+            SDL_Color fColor = sprinting ? SDL_Color{180, 210, 255, 100} : SDL_Color{160, 190, 255, 60};
+            m_renderer.spawnSoundRing(m_net.localX(), m_net.localY(), fRadius, fColor);
         }
     } else {
         m_footstepTimer = 0.0f;
@@ -1485,6 +1491,7 @@ void Game::update(float dt) {
     m_camera.y += (targetY - m_camera.y) * camSpeed * dt;
     
     m_renderer.updateParticles(dt);
+    m_renderer.updateSoundRings(dt);
 
     // 공격 모션 타이머 감소
     if (m_attackTimer  > 0.0f) m_attackTimer  -= dt;
@@ -1621,6 +1628,7 @@ void Game::renderIngame() {
     }
 
     m_renderer.drawParticles(m_camera);
+    m_renderer.drawSoundRings(m_camera);
 
     // 4+5. 원격 + 로컬 엔티티 + 건물 + 파밍 상자를 y-sort 후 통합 그리기 (입체감)
     float hpPct    = m_net.localHp() / std::max(1.0f, m_net.localMaxHp());

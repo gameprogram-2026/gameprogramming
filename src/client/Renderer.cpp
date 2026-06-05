@@ -3789,6 +3789,52 @@ void Renderer::spawnHealEffect(float x, float y) {
     }
 }
 
+void Renderer::spawnSoundRing(float x, float y, float maxRadius, SDL_Color color) {
+    SoundRing r;
+    r.x = x; r.y = y;
+    r.currentRadius = 0.0f;
+    r.maxRadius = maxRadius;
+    r.life = r.maxLife = 0.75f;
+    r.color = color;
+    m_soundRings.push_back(r);
+}
+
+void Renderer::updateSoundRings(float dt) {
+    for (auto it = m_soundRings.begin(); it != m_soundRings.end(); ) {
+        it->life -= dt;
+        if (it->life <= 0.0f) {
+            it = m_soundRings.erase(it);
+        } else {
+            float progress = 1.0f - (it->life / it->maxLife);
+            it->currentRadius = it->maxRadius * progress;
+            ++it;
+        }
+    }
+}
+
+void Renderer::drawSoundRings(const Camera& cam) {
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+    for (const auto& ring : m_soundRings) {
+        float t = ring.life / ring.maxLife; // 1→0 as it expands
+        uint8_t a = static_cast<uint8_t>(ring.color.a * t * t); // quadratic fade
+        if (a == 0) continue;
+        SDL_SetRenderDrawColor(m_renderer, ring.color.r, ring.color.g, ring.color.b, a);
+
+        int cx, cy;
+        cam.worldToScreen(ring.x, ring.y, cx, cy);
+        int r = static_cast<int>(ring.currentRadius * cam.zoom);
+        if (r <= 0) continue;
+
+        // 2도 간격 점으로 원 테두리 그리기
+        for (int deg = 0; deg < 360; deg += 2) {
+            float rad = deg * 3.14159265f / 180.0f;
+            int px = cx + static_cast<int>(std::cos(rad) * r);
+            int py = cy + static_cast<int>(std::sin(rad) * r);
+            SDL_RenderDrawPoint(m_renderer, px, py);
+        }
+    }
+}
+
 } // namespace dz
 
 

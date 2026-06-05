@@ -132,6 +132,14 @@ struct BloodStain {
     float size;
 };
 
+struct SoundRing {
+    float x, y;
+    float currentRadius;
+    float maxRadius;
+    float life, maxLife;
+    SDL_Color color;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Renderer
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +161,9 @@ public:
     void spawnMeleeArc(float x, float y, float angle);
     void spawnBloodStain(float x, float y);
     void spawnHealEffect(float x, float y);
+    void spawnSoundRing(float x, float y, float maxRadius, SDL_Color color);
+    void updateSoundRings(float dt);
+    void drawSoundRings(const Camera& cam);
 
     // ── 인게임 ────────────────────────────────────────────────────────────────
     void drawTileMap(const TileMap& map, const Camera& cam, float localX, float localY);
@@ -249,8 +260,9 @@ private:
     int           m_screenH   = 0;
     SDL_Texture*  m_fowTexture = nullptr;  ///< 시야각 안개-of-war 렌더 타깃
 
-    std::vector<Particle> m_particles;
+    std::vector<Particle>   m_particles;
     std::vector<BloodStain> m_bloodStains;
+    std::vector<SoundRing>  m_soundRings;
 
 
 
