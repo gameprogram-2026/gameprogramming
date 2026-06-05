@@ -1104,6 +1104,13 @@ void Game::processEvents() {
             if (m_craftScroll > MAX_SCROLL) m_craftScroll = MAX_SCROLL;
         }
         processCraftingMouse();
+    } else {
+        // 인벤토리/제작UI 닫혀있을 때: 마우스 휠로 카메라 줌 조정
+        int zoomWheel = m_input.consumeWheel();
+        if (zoomWheel != 0) {
+            m_camera.zoom *= std::pow(1.15f, static_cast<float>(zoomWheel));
+            m_camera.zoom = std::max(0.5f, std::min(3.0f, m_camera.zoom));
+        }
     }
 
     bool curI = m_input.isKeyDown(SDL_SCANCODE_I);

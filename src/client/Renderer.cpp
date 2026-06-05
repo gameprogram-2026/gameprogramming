@@ -3136,28 +3136,49 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
     const int MM  = 160;
     const int MMX = m_screenW - MM - 14;
     const int MMY = 14;
-    const float MW = map.width() * 32.0f;
-    const float MH = map.height() * 32.0f;
 
-    // 외곽 테두리 + 배경
+    // 레이더 범위: 플레이어 중심 40타일 반경
+    const float RADAR_RANGE = 40.0f * 32.0f;  // 1280 world pixels
+
+    // 외곽 패널
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
     drawPanel(MMX - 2, MMY - 2, MM + 4, MM + 32, {6, 8, 14, 230}, {60, 70, 100, 200}, 2);
 
-    for (const auto& z : map.getDistricts()) {
-        SDL_Color col = districtColor(z.theme, 45);
-        SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
-        SDL_Rect r = {
-            MMX + static_cast<int>((z.x * TILE_SIZE / MW) * MM),
-            MMY + static_cast<int>((z.y * TILE_SIZE / MH) * MM),
-            static_cast<int>((z.w * TILE_SIZE / MW) * MM),
-            static_cast<int>((z.h * TILE_SIZE / MH) * MM)
-        };
-        SDL_RenderFillRect(m_renderer, &r);
-        if (r.w >= 42 && r.h >= 28) {
-            drawText(z.label.empty() ? z.key : z.label,
-                     r.x + r.w / 2, r.y + r.h / 2 - 5,
-                     {230, 230, 220, 170}, m_fonts.get(10), true);
+    // 미니맵 영역 클리핑 (이 안에서만 그려짐)
+    SDL_Rect clipRect = {MMX, MMY, MM, MM};
+    SDL_RenderSetClipRect(m_renderer, &clipRect);
+
+    // 배경
+    SDL_SetRenderDrawColor(m_renderer, 15, 20, 25, 255);
+    SDL_RenderFillRect(m_renderer, &clipRect);
+
+    // world → 레이더 화면 좌표 변환 (플레이어가 항상 중앙)
+    auto toMM = [&](float wx, float wy, int& px, int& py) {
+        px = MMX + MM/2 + static_cast<int>((wx - lx) / RADAR_RANGE * (MM/2));
+        py = MMY + MM/2 + static_cast<int>((wy - ly) / RADAR_RANGE * (MM/2));
+    };
+
+    // 건물 표시
+    for (const auto& b : map.getBuildings()) {
+        float bx = b.x * 32.0f, by_w = b.y * 32.0f;
+        float bw = b.w * 32.0f, bh = b.h * 32.0f;
+        int sx, sy, ex, ey;
+        toMM(bx, by_w, sx, sy);
+        toMM(bx + bw, by_w + bh, ex, ey);
+        int rw = ex - sx, rh = ey - sy;
+        if (rw <= 0) rw = 1;
+        if (rh <= 0) rh = 1;
+        SDL_Color col;
+        switch(b.theme) {
+            case 0: col = {160, 130, 90, 200}; break;
+            case 1: col = {90, 110, 160, 200}; break;
+            case 2: col = {80, 85, 80, 200};   break;
+            case 3: col = {70, 90, 55, 200};   break;
+            default: col = {100, 100, 100, 200}; break;
         }
+        SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
+        SDL_Rect br = {sx, sy, rw, rh};
+        SDL_RenderFillRect(m_renderer, &br);
     }
 
     // 그리드 라인
@@ -3169,27 +3190,23 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
         SDL_RenderDrawLine(m_renderer, MMX, gy, MMX + MM, gy);
     }
 
-    auto toMM = [&](float wx, float wy, int& px, int& py) {
-        px = MMX + static_cast<int>((wx / MW) * MM);
-        py = MMY + static_cast<int>((wy / MH) * MM);
-    };
-
-    // 탈출 구역 (pulsing)
+    // 탈출 구역
     float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() * 0.004f);
     uint8_t extA = static_cast<uint8_t>(120 + 100 * pulse);
     for (const auto& z : zones) {
         int epx, epy;
         toMM(z.first, z.second, epx, epy);
-        drawFilledCircle(epx, epy, 6, {50, 220, 50, static_cast<uint8_t>(60 + 40 * pulse)});
+        drawFilledCircle(epx, epy, 5, {50, 220, 50, static_cast<uint8_t>(60 + 40 * pulse)});
         SDL_SetRenderDrawColor(m_renderer, 50, 220, 50, extA);
-        for (int a = 0; a < 360; a += 15) {
-            float rad = a * 3.14159f / 180.f;
-            SDL_RenderDrawPoint(m_renderer, epx + static_cast<int>(std::cos(rad) * 6),
-                                            epy + static_cast<int>(std::sin(rad) * 6));
+        for (int a = 0; a < 360; a += 20) {
+            float rad = a * 3.14159f / 180.0f;
+            SDL_RenderDrawPoint(m_renderer,
+                epx + static_cast<int>(std::cos(rad) * 5),
+                epy + static_cast<int>(std::sin(rad) * 5));
         }
     }
 
-    // 원격 엔티티들 (좀비 / 플레이어)
+    // 원격 엔티티 (좀비/플레이어)
     for (int i = 0; i < net.remoteCount(); ++i) {
         const auto& r = net.remotes()[i];
         if (r.snap[1].statusFlags & STATUS_DEAD) continue;
@@ -3201,25 +3218,28 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
             SDL_Rect dot = {px - 1, py - 1, 3, 3};
             SDL_RenderFillRect(m_renderer, &dot);
         } else {
-            // 다른 플레이어 — 주황색 점 (팀 기능 완벽 지원 전까지는 모두 적으로 표시)
             drawFilledCircle(px, py, 3, {255, 120, 30, 220});
         }
     }
 
-    // 로컬 플레이어 (흰 점 + 팀 테두리)
-    int lpx, lpy;
-    toMM(lx, ly, lpx, lpy);
+    // 로컬 플레이어 (항상 중앙)
+    int lpx = MMX + MM / 2;
+    int lpy = MMY + MM / 2;
     SDL_Color tc = Col::TEAM[std::max(0, std::min(4, teamID))];
     drawFilledCircle(lpx, lpy, 5, tc);
     drawFilledCircle(lpx, lpy, 3, {255, 255, 255, 255});
 
-    // 미니맵 테두리 재그리기 (엔티티가 경계 넘지 않게)
-    SDL_SetRenderDrawColor(m_renderer, 60, 70, 100, 200);
+    // 클리핑 해제
+    SDL_RenderSetClipRect(m_renderer, nullptr);
+
+    // 테두리 (클리핑 해제 후)
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(m_renderer, 60, 70, 100, 255);
     SDL_Rect border = {MMX, MMY, MM, MM};
     SDL_RenderDrawRect(m_renderer, &border);
 
-    // 하단 레이블
-    drawText("MAP  [M] 전체 지도", MMX + MM / 2, MMY + MM + 4, {140, 150, 180, 200}, m_fonts.get(10), true);
+    // 레이블
+    drawText("RADAR [M]", MMX + MM / 2, MMY + MM + 4, {140, 150, 180, 200}, m_fonts.get(10), true);
 }
 
 void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float lx, float ly, int teamID, const std::vector<std::pair<float,float>>& zones) {
