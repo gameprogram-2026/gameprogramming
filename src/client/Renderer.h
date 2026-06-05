@@ -57,7 +57,6 @@ struct ClientInventory {
     InventoryItem gridSlots[20];       // 최대 20 슬롯
     InventoryItem stashSlots[40];      // 40 스태시 슬롯
     InventoryItem primaryWeapon;
-    InventoryItem secondaryWeapon;
     int           money        = 0;
     float         totalWeight  = 0.0f;
     float         maxWeight    = 150.0f;
@@ -75,16 +74,11 @@ struct ClientInventory {
     }
 
     bool addItem(const InventoryItem& item) {
-        // 무기류는 장비 슬롯으로
+        // 무기류는 주무기 슬롯으로 (1개만)
         if (isWeaponItem(item.name)) {
             if (!primaryWeapon.isValid()) {
                 primaryWeapon = item;
                 totalWeight  += item.weight * item.qty;
-                return true;
-            }
-            if (!secondaryWeapon.isValid()) {
-                secondaryWeapon = item;
-                totalWeight    += item.weight * item.qty;
                 return true;
             }
         }
@@ -223,7 +217,7 @@ public:
     /// 화면 하단 핫바 (무기 슬롯 1-2, 소모품 슬롯 3-5)
     /// consumableIdx[3]: 그리드 슬롯 인덱스 (-1이면 빈 슬롯)
     void drawHotbar(const ClientInventory& inv, int selectedSlot,
-                    const int consumableIdx[3], int mouseX, int mouseY);
+                    const int consumableIdx[4], int mouseX, int mouseY);
 
     /// 120도 시야각 안개-of-war.  모든 월드 요소 렌더링 후, HUD 전에 호출.
     void drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam, float gameTime);

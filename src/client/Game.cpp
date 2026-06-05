@@ -590,7 +590,6 @@ void Game::runDead() {
             m_net.clearLocalNetID();
             for (auto& slot : m_inventory.gridSlots) slot = {};
             m_inventory.primaryWeapon = {};
-            m_inventory.secondaryWeapon = {};
             m_inventory.usedSlots = 0;
             m_buildMode     = false;
             m_showInventory = false;
@@ -695,14 +694,14 @@ bool Game::hitTestInventorySlot(int mx, int my,
 // ─────────────────────────────────────────────────────────────────────────────
 // 핫바 소모품 슬롯 → 그리드 인덱스 매핑
 // ─────────────────────────────────────────────────────────────────────────────
-void Game::getHotbarConsumables(int outIdx[3]) const {
+void Game::getHotbarConsumables(int outIdx[4]) const {
     int found = 0;
-    for (int i = 0; i < 20 && found < 3; ++i) {
+    for (int i = 0; i < 20 && found < 4; ++i) {
         const InventoryItem& s = m_inventory.gridSlots[i];
         if (s.isValid() && !ClientInventory::isWeaponItem(s.name))
             outIdx[found++] = i;
     }
-    while (found < 3) outIdx[found++] = -1;
+    while (found < 4) outIdx[found++] = -1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -761,9 +760,6 @@ void Game::processInventoryMouse() {
                 item = m_inventory.gridSlots[idx];
             else if (src == DragState::Src::Primary)
                 item = m_inventory.primaryWeapon;
-            else if (src == DragState::Src::Secondary)
-                item = m_inventory.secondaryWeapon;
-
             if (item.isValid()) {
                 const DismantlePreviewRecipe* recipe = findDismantlePreview(item.name);
                 if (!recipe) {
@@ -902,8 +898,6 @@ void Game::processInventoryMouse() {
             srcItem = m_inventory.gridSlots[gidx];
         else if (src == DragState::Src::Primary)
             srcItem = m_inventory.primaryWeapon;
-        else if (src == DragState::Src::Secondary)
-            srcItem = m_inventory.secondaryWeapon;
         else if (src == DragState::Src::Stash && gidx >= 0 && gidx < 40)
             srcItem = m_inventory.stashSlots[gidx];
 
@@ -935,18 +929,14 @@ void Game::processInventoryMouse() {
                     dstItem = m_inventory.gridSlots[dstIdx];
                 else if (dstSrc == DragState::Src::Primary)
                     dstItem = m_inventory.primaryWeapon;
-                else if (dstSrc == DragState::Src::Secondary)
-                    dstItem = m_inventory.secondaryWeapon;
                 else if (dstSrc == DragState::Src::Stash && dstIdx >= 0 && dstIdx < 40)
                     dstItem = m_inventory.stashSlots[dstIdx];
 
                 // 무기 슬롯에는 무기만 허용
                 bool srcIsWeapon = ClientInventory::isWeaponItem(m_drag.item.name);
                 bool dstIsWeapon = dstItem.isValid() && ClientInventory::isWeaponItem(dstItem.name);
-                bool srcIsEquip  = (m_drag.src == DragState::Src::Primary ||
-                                    m_drag.src == DragState::Src::Secondary);
-                bool dstIsEquip  = (dstSrc == DragState::Src::Primary ||
-                                    dstSrc == DragState::Src::Secondary);
+                bool srcIsEquip  = (m_drag.src == DragState::Src::Primary);
+                bool dstIsEquip  = (dstSrc == DragState::Src::Primary);
                 bool canDrop = (!dstIsEquip || srcIsWeapon) &&
                                (!srcIsEquip || !dstItem.isValid() || dstIsWeapon);
 
@@ -956,8 +946,6 @@ void Game::processInventoryMouse() {
                         m_inventory.gridSlots[m_drag.gridIdx] = dstItem;
                     else if (m_drag.src == DragState::Src::Primary)
                         m_inventory.primaryWeapon = dstItem;
-                    else if (m_drag.src == DragState::Src::Secondary)
-                        m_inventory.secondaryWeapon = dstItem;
                     else if (m_drag.src == DragState::Src::Stash)
                         m_inventory.stashSlots[m_drag.gridIdx] = dstItem;
 
@@ -966,8 +954,6 @@ void Game::processInventoryMouse() {
                         m_inventory.gridSlots[dstIdx] = m_drag.item;
                     else if (dstSrc == DragState::Src::Primary)
                         m_inventory.primaryWeapon = m_drag.item;
-                    else if (dstSrc == DragState::Src::Secondary)
-                        m_inventory.secondaryWeapon = m_drag.item;
                     else if (dstSrc == DragState::Src::Stash)
                         m_inventory.stashSlots[dstIdx] = m_drag.item;
                     m_inventory.usedSlots = 0;
@@ -1206,63 +1192,32 @@ void Game::processEvents() {
         return;
     }
 
-    if (m_hotbarSelected == 1 &&
-        (!m_inventory.secondaryWeapon.isValid() ||
-         !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
-        m_hotbarSelected = 0;
-    }
-
-    bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
-    if (curQ && !m_prevQ) {
-        const bool primaryReady = m_inventory.primaryWeapon.isValid() &&
-                                  ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name);
-        const bool secondaryReady = m_inventory.secondaryWeapon.isValid() &&
-                                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name);
-        if (m_hotbarSelected == 0 && secondaryReady) {
-            m_hotbarSelected = 1;
-            m_net.sendSelectWeapon(1);
-            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
-        } else if (primaryReady) {
-            m_hotbarSelected = 0;
-            m_net.sendSelectWeapon(0);
-            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
-        }
-    }
-    m_prevQ = curQ;
-
     static const SDL_Scancode NUM_SCANCODES[5] = {
         SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5
     };
-    int hotbarConsIdx[3];
+    int hotbarConsIdx[4];
     getHotbarConsumables(hotbarConsIdx);
     for (int i = 0; i < 5; ++i) {
         bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
         if (cur && !m_prevNum[i]) {
             if (i == 0) {
+                // 키 1: 주무기 선택
                 if (m_inventory.primaryWeapon.isValid() &&
                     ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
                     m_hotbarSelected = 0;
                     m_net.sendSelectWeapon(0);
                     m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
                 }
-            } else if (i == 1) {
-                if (m_inventory.secondaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name)) {
-                    m_hotbarSelected = 1;
-                    m_net.sendSelectWeapon(1);
-                    m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
-                }
             } else {
+                // 키 2-5: 소모품 사용
                 m_hotbarSelected = i;
-                useConsumable(hotbarConsIdx[i-2]);
+                useConsumable(hotbarConsIdx[i-1]);
             }
         }
         m_prevNum[i] = cur;
     }
 
-    const auto& activeWeapon = (m_hotbarSelected == 1)
-                                 ? m_inventory.secondaryWeapon
-                                 : m_inventory.primaryWeapon;
+    const auto& activeWeapon = m_inventory.primaryWeapon;
     const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
     const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
     const bool isSMG = hasWeapon && activeWeapon.name == "smg_9mm";
@@ -1373,29 +1328,18 @@ void Game::processInventorySync() {
                 totalW += sync.gridSlots[i].weight * sync.gridSlots[i].quantity;
             }
         }
-        for (int i=0; i<2; ++i) {
-            if (sync.equipped[i].itemID != 0) {
-                InventoryItem eq;
-                eq.name = sync.equipped[i].key;
-                eq.qty = sync.equipped[i].quantity;
-                eq.weight = sync.equipped[i].weight;
-                eq.grade = "normal";
-                totalW += sync.equipped[i].weight * sync.equipped[i].quantity;
-                if (i == 0) newInv.primaryWeapon = eq;
-                if (i == 1) newInv.secondaryWeapon = eq;
-            }
+        // 주무기 슬롯(equipped[0])만 사용
+        if (sync.equipped[0].itemID != 0) {
+            InventoryItem eq;
+            eq.name = sync.equipped[0].key;
+            eq.qty = sync.equipped[0].quantity;
+            eq.weight = sync.equipped[0].weight;
+            eq.grade = "normal";
+            totalW += sync.equipped[0].weight * sync.equipped[0].quantity;
+            newInv.primaryWeapon = eq;
         }
         newInv.totalWeight = totalW;
         m_inventory = newInv;
-        if (m_hotbarSelected == 1 &&
-            (!m_inventory.secondaryWeapon.isValid() ||
-             !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
-                m_hotbarSelected = 0;
-                if (m_inventory.primaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
-                    m_net.sendSelectWeapon(0);
-                }
-            }
         m_net.clearInventorySync();
     }
 
@@ -1658,9 +1602,7 @@ void Game::renderIngame() {
     bool  bleeding = m_net.localBleeding();
     bool  onFire   = m_net.localOnFire();
     int   teamID   = m_net.localTeam();
-    const InventoryItem& hudWeapon = (m_hotbarSelected == 1 && m_inventory.secondaryWeapon.isValid())
-                                       ? m_inventory.secondaryWeapon
-                                       : m_inventory.primaryWeapon;
+    const InventoryItem& hudWeapon = m_inventory.primaryWeapon;
     std::string wName;
     if (hudWeapon.isValid()) {
         wName = hudWeapon.name;
@@ -1758,7 +1700,7 @@ void Game::renderIngame() {
 
     // 8. 핫바 (항상 표시)
     {
-        int hotbarConsIdx[3];
+        int hotbarConsIdx[4];
         getHotbarConsumables(hotbarConsIdx);
         int mx, my;
         m_input.mousePos(mx, my);

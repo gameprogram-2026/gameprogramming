@@ -2536,11 +2536,10 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
             }
         };
 
-        drawEquipSlot("주무기",   inv.primaryWeapon,   eqX, eqY,              slotW, slotH, false);
-        drawEquipSlot("보조무기", inv.secondaryWeapon, eqX, eqY+slotH+slotGap, slotW, slotH, false);
+        drawEquipSlot("주무기",   inv.primaryWeapon,   eqX, eqY, slotW, slotH, false);
 
         // 무게 바
-        int wbY = eqY + (slotH+slotGap)*2 + 16;
+        int wbY = eqY + slotH + 16;
         drawText("무게", eqX, wbY, Col::TEXT_LO, fSm);
         float wPct = inv.maxWeight > 0 ? inv.totalWeight/inv.maxWeight : 0.0f;
         drawHpBar(eqX, wbY+18, wPct, slotW, 8);
@@ -2563,9 +2562,7 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
         drawPanel(eqX, tipY, slotW, 88, {12,15,24,220}, {30,38,55,255}, 1);
         drawText("단축키 안내", eqX+8, tipY+6, Col::TEXT_LO, m_fonts.get(11));
         drawText("[1] 주무기 선택", eqX+8, tipY+20, {80,160,255,200}, m_fonts.get(11));
-        drawText("[2] 보조무기 선택", eqX+8, tipY+33, {80,160,255,200}, m_fonts.get(11));
-        drawText("[3-5] 소모품 사용", eqX+8, tipY+46, {80,220,120,200}, m_fonts.get(11));
-        drawText("[Q] 무기 교체", eqX+8, tipY+59, {180,180,180,180}, m_fonts.get(11));
+        drawText("[2-5] 소모품 사용", eqX+8, tipY+33, {80,220,120,200}, m_fonts.get(11));
         drawText("밖으로 드래그: 버리기", eqX+8, tipY+72, {180,180,180,180}, m_fonts.get(11));
 
 
@@ -2800,7 +2797,7 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
 // 슬롯 1-2: 무기, 슬롯 3-5: 소모품
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
-                           const int consumableIdx[3], int mouseX, int mouseY) {
+                           const int consumableIdx[4], int mouseX, int mouseY) {
     TTF_Font* fSm  = m_fonts.get(12);
     TTF_Font* fKey  = m_fonts.get(11);
 
@@ -2820,12 +2817,12 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
         bool hov = (mouseX>=sx && mouseX<sx+SLOT_W &&
                     mouseY>=hbY && mouseY<hbY+SLOT_H);
 
-        // 슬롯 내용 결정
+        // 슬롯 내용 결정: 0=주무기, 1-4=소모품
         const InventoryItem* slotItem = nullptr;
-        if      (s == 0) slotItem = inv.primaryWeapon.isValid()   ? &inv.primaryWeapon   : nullptr;
-        else if (s == 1) slotItem = inv.secondaryWeapon.isValid() ? &inv.secondaryWeapon : nullptr;
-        else {
-            int ci = consumableIdx[s-2];
+        if (s == 0) {
+            slotItem = inv.primaryWeapon.isValid() ? &inv.primaryWeapon : nullptr;
+        } else {
+            int ci = consumableIdx[s-1];
             if (ci >= 0 && ci < 20 && inv.gridSlots[ci].isValid())
                 slotItem = &inv.gridSlots[ci];
         }
@@ -2840,7 +2837,6 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
         int bw = selected ? 2 : 1;
         drawPanel(sx, hbY, SLOT_W, SLOT_H, bg, border, bw);
 
-        // 선택 선택 하이라이트 (상단 밝은 줄)
         if (selected) {
             SDL_SetRenderDrawColor(m_renderer,
                 Col::ACCENT.r, Col::ACCENT.g, Col::ACCENT.b, 180);
@@ -2848,8 +2844,8 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
             SDL_RenderFillRect(m_renderer, &selBar);
         }
 
-        // 구분선: 무기(1-2) / 소모품(3-5) 사이
-        if (s == 2) {
+        // 구분선: 주무기(1) / 소모품(2-5) 사이
+        if (s == 1) {
             SDL_SetRenderDrawColor(m_renderer, 50,60,80,200);
             SDL_RenderDrawLine(m_renderer, sx-GAP/2, hbY+4, sx-GAP/2, hbY+SLOT_H-4);
         }

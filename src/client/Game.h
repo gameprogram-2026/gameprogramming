@@ -63,7 +63,7 @@ private:
     bool hitTestInventorySlot(int mx, int my,
                               DragState::Src& src, int& gridIdx) const;
     /// 핫바 소모품 3칸의 gridSlots 인덱스 반환 (-1 = 빈 칸)
-    void getHotbarConsumables(int outIdx[3]) const;
+    void getHotbarConsumables(int outIdx[4]) const;
     /// 소모품 한 번 사용 (qty 감소, 0이면 슬롯 제거)
     void useConsumable(int gridIdx);
 
