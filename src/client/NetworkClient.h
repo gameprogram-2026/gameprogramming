@@ -182,6 +182,8 @@ public:
     const std::vector<DamageEventPacket>& damageEvents() const noexcept { return m_damageEvents; }
     void clearDamageEvents() noexcept { m_damageEvents.clear(); }
 
+    const std::vector<std::pair<int,int>>& fireTiles() const noexcept { return m_fireTiles; }
+
     bool hasInventorySync() const { return m_hasInvSync; }
     const InventorySyncPacket& getInventorySync() const { return m_invSyncPkt; }
     void clearInventorySync() { m_hasInvSync = false; }
@@ -250,6 +252,7 @@ private:
     StashSyncPacket m_stashSyncPkt{};
 
     std::vector<DamageEventPacket> m_damageEvents;
+    std::vector<std::pair<int,int>> m_fireTiles;
     
     // 게임 상태 (승패 등)
     bool m_recentHit = false;

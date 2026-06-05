@@ -1311,6 +1311,7 @@ void Renderer::drawBuildingOverlay(const TileMap::BuildingDef& b, const Camera& 
 // 화염
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawFire(const std::vector<std::pair<int,int>>& fires, const Camera& cam) {
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
     for (auto [tx, ty] : fires) {
         int sx = static_cast<int>((tx*TILE_SIZE-cam.x)*cam.zoom + m_screenW*0.5f);
         int sy = static_cast<int>((ty*TILE_SIZE-cam.y)*cam.zoom + m_screenH*0.5f);

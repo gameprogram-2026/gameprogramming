@@ -105,6 +105,22 @@ constexpr size_t MAX_SNAPSHOT_ENTITIES = 64;
 constexpr size_t SNAPSHOT_MAX_BYTES =
     sizeof(SnapshotHeader) + MAX_SNAPSHOT_ENTITIES * sizeof(EntityStateRecord);
 
+constexpr size_t MAX_FIRE_UPDATE_TILES = 128;
+
+#pragma pack(push, 1)
+struct FireTileRecord {
+    int16_t tx = 0;
+    int16_t ty = 0;
+};
+
+struct FireUpdatePacket {
+    uint8_t packetType = static_cast<uint8_t>(PacketType::S2C_FireUpdate);
+    uint8_t tileCount  = 0;
+    FireTileRecord tiles[MAX_FIRE_UPDATE_TILES] = {};
+};
+static_assert(sizeof(FireTileRecord) == 4, "FireTileRecord must be exactly 4 bytes");
+#pragma pack(pop)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // InputPacket — client → server (CHAN_UNRELIABLE, ~60 Hz)
 // ─────────────────────────────────────────────────────────────────────────────

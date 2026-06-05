@@ -1716,6 +1716,7 @@ void Game::renderIngame() {
 
     // 2. 탈출존
     m_renderer.drawExtractionZones(m_camera, m_extractionZones, m_zonesOpen);
+    m_renderer.drawFire(m_net.fireTiles(), m_camera);
 
     std::vector<LootBoxView> views;
     for (int i = 0; i < m_net.remoteCount(); ++i) {

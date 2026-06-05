@@ -23,6 +23,9 @@ constexpr int NIGHT_ZOMBIE_TARGET = 85;
 constexpr int MAX_ZOMBIE_SPAWN_BATCH = 18;
 constexpr int NIGHT_WAVE_BASE = 8;
 constexpr int NIGHT_WAVE_PER_PLAYER = 3;
+constexpr float ZOMBIE_PLAYER_SAFE_RADIUS = 960.0f;
+constexpr float NIGHT_WAVE_MIN_SPAWN_DIST = 1100.0f;
+constexpr float NIGHT_WAVE_EXTRA_SPAWN_DIST = 450.0f;
 
 uint32_t itemIDForKey(const char* key) {
     if (std::strcmp(key, "scrap_pipe") == 0)      return 1;
@@ -354,6 +357,21 @@ void GameServer::tick(float dt) {
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::sendSnapshots() {
     m_net.broadcastSnapshot(m_world, static_cast<uint16_t>(m_tick));
+
+    FireUpdatePacket firePkt{};
+    const auto& fireTiles = m_fire.tiles();
+    firePkt.tileCount = static_cast<uint8_t>(
+        std::min(fireTiles.size(), static_cast<size_t>(MAX_FIRE_UPDATE_TILES)));
+    for (uint8_t i = 0; i < firePkt.tileCount; ++i) {
+        firePkt.tiles[i].tx = fireTiles[i].tx;
+        firePkt.tiles[i].ty = fireTiles[i].ty;
+    }
+    const size_t fireLen = 2 + static_cast<size_t>(firePkt.tileCount) * sizeof(FireTileRecord);
+    for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
+        if (m_net.isConnected(pi)) {
+            m_net.sendUnreliable(pi, &firePkt, fireLen);
+        }
+    }
 
     for (EntityID id : m_world.alive()) {
         Entity e{id};
@@ -1252,6 +1270,41 @@ void GameServer::spawnZombies() {
     struct ZSpawn { float x, y; ZombieType type; float hp; };
     std::vector<ZSpawn> spawns;
     spawns.reserve(spawnBudget);
+
+    auto tooCloseToPlayerOrSpawn = [&](float x, float y, float radius) {
+        const float radius2 = radius * radius;
+        for (EntityID id : m_world.alive()) {
+            Entity e{id};
+            auto* net = m_world.tryGet<NetworkComponent>(e);
+            if (!net || net->role != NetRole::LocallyOwned) continue;
+            auto* hp = m_world.tryGet<HealthComponent>(e);
+            if (!hp || !hp->isAlive) continue;
+            auto* xf = m_world.tryGet<TransformComponent>(e);
+            if (!xf) continue;
+            float dx = xf->x - x;
+            float dy = xf->y - y;
+            if (dx * dx + dy * dy < radius2) return true;
+        }
+
+        for (const auto& ps : m_map.getPlayerSpawns()) {
+            float sx = TileMap::tileCentre(ps.x);
+            float sy = TileMap::tileCentre(ps.y);
+            float dx = sx - x;
+            float dy = sy - y;
+            if (dx * dx + dy * dy < radius2) return true;
+        }
+        return false;
+    };
+
+    auto makeZombieRoll = []() {
+        int roll = std::rand() % 20;
+        ZombieType type = (roll == 0)   ? ZombieType::Brute
+                        : (roll < 5)    ? ZombieType::Runner
+                        :                 ZombieType::Shambler;
+        float hp = (type == ZombieType::Brute) ? 200.f
+                 : (type == ZombieType::Runner) ? 40.f : 60.f;
+        return std::pair<ZombieType, float>{type, hp};
+    };
     
     // 파밍 지역(건물 내부) 위주로 스폰 (안전 지역 확보)
     const auto& bds = m_map.getBuildings();
@@ -1299,9 +1352,7 @@ void GameServer::spawnZombies() {
                 (allDoorsClosed(i) || buildingHasBrokenDoor(i))) continue;
             eligibleBuildings.push_back(i);
         }
-        if (eligibleBuildings.empty()) return;
-
-        for (int i = 0; i < spawnBudget; ++i) {
+        for (int attempts = 0; !eligibleBuildings.empty() && static_cast<int>(spawns.size()) < spawnBudget && attempts < spawnBudget * 20; ++attempts) {
             const auto& bd = bds[eligibleBuildings[std::rand() % eligibleBuildings.size()]];
             int insetX = (bd.w > 6) ? 2 : 1;
             int insetY = (bd.h > 6) ? 2 : 1;
@@ -1309,13 +1360,25 @@ void GameServer::spawnZombies() {
             int usableH = std::max(1, bd.h - insetY * 2);
             float bx = TileMap::tileCentre(bd.x + insetX + (std::rand() % usableW));
             float by = TileMap::tileCentre(bd.y + insetY + (std::rand() % usableH));
-            int roll = std::rand() % 20;
-            ZombieType type = (roll == 0)   ? ZombieType::Brute    // 5%
-                            : (roll < 5)    ? ZombieType::Runner   // 20%
-                            :                 ZombieType::Shambler; // 75%
-            float hp = (type == ZombieType::Brute) ? 200.f
-                     : (type == ZombieType::Runner) ? 40.f : 60.f;
+            if (tooCloseToPlayerOrSpawn(bx, by, ZOMBIE_PLAYER_SAFE_RADIUS)) continue;
+
+            auto [type, hp] = makeZombieRoll();
             spawns.push_back({bx, by, type, hp});
+        }
+    }
+
+    if (static_cast<int>(spawns.size()) < spawnBudget) {
+        for (int attempts = 0; static_cast<int>(spawns.size()) < spawnBudget && attempts < spawnBudget * 40; ++attempts) {
+            int tx = std::rand() % std::max(1, m_map.width());
+            int ty = std::rand() % std::max(1, m_map.height());
+            if (m_map.isSolid(tx, ty)) continue;
+
+            float x = TileMap::tileCentre(tx);
+            float y = TileMap::tileCentre(ty);
+            if (tooCloseToPlayerOrSpawn(x, y, ZOMBIE_PLAYER_SAFE_RADIUS)) continue;
+
+            auto [type, hp] = makeZombieRoll();
+            spawns.push_back({x, y, type, hp});
         }
     }
 
@@ -1682,13 +1745,29 @@ void GameServer::spawnNightWave() {
         auto* txf = m_world.tryGet<TransformComponent>(target);
         if (!txf) continue;
 
-        // 플레이어 반경 600~800 픽셀 위치에서 스폰 (화면 밖)
-        float angle = static_cast<float>(std::rand() % 360) * 3.14159f / 180.0f;
-        float dist  = 600.0f + static_cast<float>(std::rand() % 200);
-        // 맵 경계 클램핑 (200x200 타일 = 6400px)
-        float mapMax = 199.0f * 32.0f;
-        float sx = std::max(32.0f, std::min(txf->x + std::cos(angle) * dist, mapMax));
-        float sy = std::max(32.0f, std::min(txf->y + std::sin(angle) * dist, mapMax));
+        float sx = 0.0f;
+        float sy = 0.0f;
+        bool foundSpawn = false;
+        const float mapMaxX = TileMap::tileCentre(std::max(0, m_map.width() - 1));
+        const float mapMaxY = TileMap::tileCentre(std::max(0, m_map.height() - 1));
+        const float minDist2 = NIGHT_WAVE_MIN_SPAWN_DIST * NIGHT_WAVE_MIN_SPAWN_DIST;
+
+        for (int attempts = 0; attempts < 24; ++attempts) {
+            float angle = static_cast<float>(std::rand() % 360) * 3.14159f / 180.0f;
+            float dist  = NIGHT_WAVE_MIN_SPAWN_DIST +
+                          static_cast<float>(std::rand() % static_cast<int>(NIGHT_WAVE_EXTRA_SPAWN_DIST));
+            sx = std::max(32.0f, std::min(txf->x + std::cos(angle) * dist, mapMaxX));
+            sy = std::max(32.0f, std::min(txf->y + std::sin(angle) * dist, mapMaxY));
+
+            float dx = sx - txf->x;
+            float dy = sy - txf->y;
+            if (dx * dx + dy * dy < minDist2) continue;
+            if (m_map.isSolid(TileMap::worldToTile(sx), TileMap::worldToTile(sy))) continue;
+
+            foundSpawn = true;
+            break;
+        }
+        if (!foundSpawn) continue;
 
         Entity z = m_world.createEntity();
         auto& zxf = m_world.addComponent<TransformComponent>(z);

@@ -76,6 +76,7 @@ bool NetworkClient::connect(const std::string& host, uint16_t port) {
                         m_justSpawned  = true;
                         m_remoteCount  = 0;
                         m_zombieDeaths.clear();
+                        m_fireTiles.clear();
                         m_predCount    = 0;
                         m_predHead     = 0;
                         isAck = true;
@@ -183,6 +184,7 @@ bool NetworkClient::pollConnect() {
                     m_justSpawned  = true;
                     m_remoteCount  = 0;
                     m_zombieDeaths.clear();
+                    m_fireTiles.clear();
                     m_predCount    = 0;
                     m_predHead     = 0;
                     done = true;
@@ -242,6 +244,7 @@ void NetworkClient::update(float dt) {
                         m_justSpawned = true;
                         m_remoteCount = 0;
                         m_zombieDeaths.clear();
+                        m_fireTiles.clear();
                         m_predCount   = 0;
                         m_predHead    = 0;
                         DZ_LOG_INFO("[Client] ConnectAck (fallback): netID=%u", m_localNetID);
@@ -373,6 +376,18 @@ void NetworkClient::update(float dt) {
                         beam.ownerTeam = tf.ownerTeam;
                         beam.ttl   = 0.15f;
                         m_turretBeams.push_back(beam);
+                    }
+                } else if (ptype == PacketType::S2C_FireUpdate) {
+                    if (ev.packet->dataLength >= 2) {
+                        const auto* pkt = reinterpret_cast<const FireUpdatePacket*>(ev.packet->data);
+                        const size_t expectedLen = 2 + static_cast<size_t>(pkt->tileCount) * sizeof(FireTileRecord);
+                        if (pkt->tileCount <= MAX_FIRE_UPDATE_TILES && ev.packet->dataLength >= expectedLen) {
+                            m_fireTiles.clear();
+                            m_fireTiles.reserve(pkt->tileCount);
+                            for (uint8_t i = 0; i < pkt->tileCount; ++i) {
+                                m_fireTiles.emplace_back(pkt->tiles[i].tx, pkt->tiles[i].ty);
+                            }
+                        }
                     }
                 } else if (ptype == PacketType::S2C_SirenEvent) {
                     m_hasSirenEvent = true;
