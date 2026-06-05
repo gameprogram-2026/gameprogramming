@@ -58,12 +58,9 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         }
     }
 
-    // 낮/밤에 따른 청각 반경 조절 (밤에는 엄청 예민해짐)
-    float hearingMult = isNight ? 2.5f : 0.3f;
-
     // Sample loudest noise within hearing range and keep its position. State changes
     // from noise must have a real destination; otherwise zombies can chase (0,0).
-    const float hearingRadius = ZOMBIE_HEARING_RADIUS * hearingMult;
+    // Detection: zombie hears the sound if it's within the noise event's own radius.
     uint8_t maxNoise = 0;
     float noiseTargetX = xf->x;
     float noiseTargetY = xf->y;
@@ -71,7 +68,7 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         const float dx = ev.x - xf->x;
         const float dy = ev.y - xf->y;
         const float dist = std::sqrt(dx * dx + dy * dy);
-        if (dist > ev.radius + hearingRadius) continue;
+        if (dist > ev.radius) continue;
         if (ev.category > maxNoise) {
             maxNoise = ev.category;
             noiseTargetX = ev.x;
@@ -250,9 +247,9 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         if (nearest.isValid()) {
             auto* nxf = world.tryGet<TransformComponent>(nearest);
             if (nxf) {
-                // 거리가 멀어도 감지 (반경 1500픽셀 내의 플레이어 무조건 타겟팅)
+                // 밤: 700픽셀(22타일) 내 플레이어 무조건 타겟팅
                 float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
-                if (dx*dx + dy*dy < 1500.0f * 1500.0f) {
+                if (dx*dx + dy*dy < 700.0f * 700.0f) {
                     ai.targetX = nxf->x;
                     ai.targetY = nxf->y;
                     ai.state = ZombieState::Frenzy;

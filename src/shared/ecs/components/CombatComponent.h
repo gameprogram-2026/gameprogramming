@@ -11,9 +11,9 @@ constexpr int PISTOL_MAG_CAPACITY = 9;
 constexpr float NOISE_WALK_RADIUS   =  48.0f;  // 1.5 m
 constexpr float NOISE_RUN_RADIUS    = 160.0f;  // 5.0 m
 constexpr float NOISE_MELEE_RADIUS  = 256.0f;  // 8.0 m
-constexpr float NOISE_PISTOL_RADIUS = 960.0f;  // 30.0 m
-constexpr float NOISE_RIFLE_RADIUS  =1280.0f;  // 40.0 m
-constexpr float NOISE_EXPLOSION_RADIUS=2880.0f;// 90.0 m — triggers Frenzy
+constexpr float NOISE_PISTOL_RADIUS = 400.0f;  // 12.5 m
+constexpr float NOISE_RIFLE_RADIUS  = 560.0f;  // 17.5 m
+constexpr float NOISE_EXPLOSION_RADIUS=1600.0f;// 50.0 m — triggers Frenzy
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MeleeWeaponDef — hitbox and damage stats for melee attacks
