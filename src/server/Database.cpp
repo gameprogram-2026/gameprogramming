@@ -169,8 +169,8 @@ bool Database::registerAccount(const std::string& username,
                                const std::string& password)
 {
     if (!m_conn) {
-        DZ_LOG_WARN("[DB] registerAccount bypassed because DB is not connected.");
-        return true;
+        DZ_LOG_WARN("[DB] registerAccount rejected because DB is not connected.");
+        return false;
     }
 
     std::string hash = hashPassword(password);
@@ -229,8 +229,8 @@ bool Database::loginAccount(const std::string& username,
                             InventoryComponent& outInv)
 {
     if (!m_conn) {
-        DZ_LOG_WARN("[DB] loginAccount bypassed because DB is not connected.");
-        return true;
+        DZ_LOG_WARN("[DB] loginAccount rejected because DB is not connected.");
+        return false;
     }
 
     std::string hash = hashPassword(password);

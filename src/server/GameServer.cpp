@@ -56,6 +56,14 @@ int countLivingZombies(World& world) {
     return count;
 }
 
+bool offlineAuthEnabled() {
+    const char* value = std::getenv("DEADZONE_OFFLINE_AUTH");
+    return value &&
+           (std::strcmp(value, "1") == 0 ||
+            std::strcmp(value, "true") == 0 ||
+            std::strcmp(value, "TRUE") == 0);
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,7 +100,7 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
             dbUser ? dbUser : "root",
             dbPass ? dbPass : "",
             dbName ? dbName : "deadzone")) {
-        DZ_LOG_ERROR("[Server] DB connection failed — set DEADZONE_DB_PASS env var. Running without DB.");
+        DZ_LOG_ERROR("[Server] DB connection failed — auth disabled. Set DEADZONE_DB_* env vars or DEADZONE_OFFLINE_AUTH=1 for local testing.");
     }
 
     // Combat callbacks — 하나의 핸들러에서 HP 이벤트 + 배신 감지 모두 처리
@@ -284,7 +292,7 @@ void GameServer::tick(float dt) {
         DZ_LOG_INFO("[Server] Day breaks! Outdoor zombies will start melting.");
     }
 
-    if (m_gameStarted && isNight) {
+    if (m_gameStarted) {
         updateZombieDoorAttacks(dt);
     }
 
@@ -372,11 +380,24 @@ void GameServer::onClientConnect(uint32_t peerIdx) {
 void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char* password, bool isRegister) {
     AuthAckPacket ack{};
     ack.packetType = static_cast<uint8_t>(PacketType::S2C_AuthAck);
+
+    const bool dbConnected = m_db.isConnected();
+    const bool allowOfflineAuth = !dbConnected && offlineAuthEnabled();
+
+    if (!dbConnected && !allowOfflineAuth) {
+        ack.success = 0;
+        std::strncpy(ack.message, "DB offline. Login disabled.", sizeof(ack.message));
+        m_net.sendReliable(peerIdx, &ack, sizeof(ack));
+        DZ_LOG_WARN("[Server] Auth rejected for '%s' because DB is offline", username);
+        return;
+    }
     
     if (isRegister) {
-        if (!m_db.isConnected() ||m_db.registerAccount(username, password)) {
+        if (allowOfflineAuth || m_db.registerAccount(username, password)) {
             ack.success = 1;
-            std::strncpy(ack.message, "Registration successful!", sizeof(ack.message));
+            std::strncpy(ack.message,
+                         allowOfflineAuth ? "Offline auth enabled. Account not saved." : "Registration successful!",
+                         sizeof(ack.message));
             m_net.sendReliable(peerIdx, &ack, sizeof(ack));
         } else {
             ack.success = 0;
@@ -404,7 +425,7 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     }
 
     InventoryComponent loadedInv;
-    if (m_db.isConnected()) {
+    if (dbConnected) {
         if (!m_db.loginAccount(username, password, loadedInv)) {
             ack.success = 0;
             std::strncpy(ack.message, "Login failed. Check credentials.", sizeof(ack.message));
@@ -412,8 +433,8 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
             return;
         }
     } else {
-        // DB 미연결 시 계정 검증 없이 허용 (테스트 / 오프라인 모드)
-        DZ_LOG_WARN("[Server] DB offline — accepting '%s' without verification", username);
+        // Explicit local-test escape hatch only.
+        DZ_LOG_WARN("[Server] DEADZONE_OFFLINE_AUTH=1 — accepting '%s' without DB verification", username);
     }
     
     ack.success = 1;
@@ -501,11 +522,15 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
     if (src && dst) {
         const bool srcIsEquip = (srcType == 1 || srcType == 2);
         const bool dstIsEquip = (dstType == 1 || dstType == 2);
-        if (dstIsEquip && src->isValid() && src->category != ItemCategory::Weapon) return;
-        if (srcIsEquip && dst->isValid() && dst->category != ItemCategory::Weapon) return;
+        auto canEquip = [](const Item& item) {
+            return item.category == ItemCategory::Weapon ||
+                   item.category == ItemCategory::Throwable;
+        };
+        if (dstIsEquip && src->isValid() && !canEquip(*src)) return;
+        if (srcIsEquip && dst->isValid() && !canEquip(*dst)) return;
 
         if (srcType == 0 && dstIsEquip && src->isValid() &&
-            src->category == ItemCategory::Weapon && !dst->isValid()) {
+            canEquip(*src) && !dst->isValid()) {
             inv.equip(srcIdx, dstType == 1 ? EquipSlot::PrimaryWeapon : EquipSlot::SecondaryWeapon);
         } else {
             std::swap(*src, *dst);
@@ -947,6 +972,7 @@ void GameServer::updateZombieDoorAttacks(float dt) {
         uint32_t netID = 0;
     };
     std::vector<PlayerHouseTarget> playerTargets(buildings.size());
+    std::vector<PlayerHouseTarget> activePlayerTargets;
 
     for (EntityID id : m_world.alive()) {
         Entity player{id};
@@ -955,6 +981,8 @@ void GameServer::updateZombieDoorAttacks(float dt) {
         auto* hp = m_world.tryGet<HealthComponent>(player);
         auto* xf = m_world.tryGet<TransformComponent>(player);
         if (!hp || !hp->isAlive || !xf) continue;
+
+        activePlayerTargets.push_back({true, xf->x, xf->y, net->netID});
 
         int tx = TileMap::worldToTile(xf->x);
         int ty = TileMap::worldToTile(xf->y);
@@ -977,7 +1005,7 @@ void GameServer::updateZombieDoorAttacks(float dt) {
     for (const auto& target : playerTargets) {
         if (target.occupied) { anyPlayerInside = true; break; }
     }
-    if (!anyPlayerInside) return;
+    if (activePlayerTargets.empty()) return;
 
     auto doorPlayerTarget = [&](const TileMap::DoorDef& door, PlayerHouseTarget& out) {
         if (door.building >= playerTargets.size()) return false;
@@ -998,20 +1026,22 @@ void GameServer::updateZombieDoorAttacks(float dt) {
         float bestTargetD2 = DOOR_TARGET_RANGE2;
         PlayerHouseTarget bestTargetPlayer{};
         const auto& doors = m_map.getDoors();
-        for (const auto& door : doors) {
-            if (door.open || door.broken) continue;
-            PlayerHouseTarget target{};
-            if (!doorPlayerTarget(door, target)) continue;
-            const float pdx = target.x - xf->x;
-            const float pdy = target.y - xf->y;
-            if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
-            const float dx = TileMap::tileCentre(door.tx) - xf->x;
-            const float dy = TileMap::tileCentre(door.ty) - xf->y;
-            const float d2 = dx * dx + dy * dy;
-            if (d2 <= bestTargetD2) {
-                bestTargetD2 = d2;
-                bestTargetDoor = static_cast<int>(door.id);
-                bestTargetPlayer = target;
+        if (anyPlayerInside) {
+            for (const auto& door : doors) {
+                if (door.open || door.broken) continue;
+                PlayerHouseTarget target{};
+                if (!doorPlayerTarget(door, target)) continue;
+                const float pdx = target.x - xf->x;
+                const float pdy = target.y - xf->y;
+                if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
+                const float dx = TileMap::tileCentre(door.tx) - xf->x;
+                const float dy = TileMap::tileCentre(door.ty) - xf->y;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 <= bestTargetD2) {
+                    bestTargetD2 = d2;
+                    bestTargetDoor = static_cast<int>(door.id);
+                    bestTargetPlayer = target;
+                }
             }
         }
         if (bestTargetDoor >= 0) {
@@ -1029,22 +1059,103 @@ void GameServer::updateZombieDoorAttacks(float dt) {
         int bestDoor = -1;
         float bestD2 = DOOR_ATTACK_RANGE2;
         PlayerHouseTarget attackTargetPlayer{};
-        for (const auto& door : doors) {
-            if (door.open || door.broken) continue;
-            PlayerHouseTarget target{};
-            if (!doorPlayerTarget(door, target)) continue;
-            const float pdx = target.x - xf->x;
-            const float pdy = target.y - xf->y;
-            if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
-            const float dx = TileMap::tileCentre(door.tx) - xf->x;
-            const float dy = TileMap::tileCentre(door.ty) - xf->y;
-            const float d2 = dx * dx + dy * dy;
-            if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestDoor = static_cast<int>(door.id);
-                attackTargetPlayer = target;
+        if (anyPlayerInside) {
+            for (const auto& door : doors) {
+                if (door.open || door.broken) continue;
+                PlayerHouseTarget target{};
+                if (!doorPlayerTarget(door, target)) continue;
+                const float pdx = target.x - xf->x;
+                const float pdy = target.y - xf->y;
+                if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
+                const float dx = TileMap::tileCentre(door.tx) - xf->x;
+                const float dy = TileMap::tileCentre(door.ty) - xf->y;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 <= bestD2) {
+                    bestD2 = d2;
+                    bestDoor = static_cast<int>(door.id);
+                    attackTargetPlayer = target;
+                }
             }
         }
+        Entity bestBarricade{NULL_ENTITY};
+        float bestBarricadeD2 = DOOR_TARGET_RANGE2;
+        PlayerHouseTarget barricadeTargetPlayer{};
+        for (EntityID bid : m_world.alive()) {
+            Entity be{bid};
+            auto* bld = m_world.tryGet<BuildingComponent>(be);
+            if (!bld || bld->isDestroyed || bld->type != BuildingType::Barricade) continue;
+            auto* bxf = m_world.tryGet<TransformComponent>(be);
+            auto* bhp = m_world.tryGet<HealthComponent>(be);
+            if (!bxf || !bhp || !bhp->isAlive) continue;
+
+            PlayerHouseTarget nearestPlayer{};
+            float nearestPlayerD2 = PLAYER_DOOR_AGGRO_RANGE2;
+            for (const auto& target : activePlayerTargets) {
+                const float pdx = target.x - bxf->x;
+                const float pdy = target.y - bxf->y;
+                const float pd2 = pdx * pdx + pdy * pdy;
+                if (pd2 < nearestPlayerD2) {
+                    nearestPlayerD2 = pd2;
+                    nearestPlayer = target;
+                }
+            }
+            if (!nearestPlayer.occupied) continue;
+
+            const float dx = bxf->x - xf->x;
+            const float dy = bxf->y - xf->y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < bestBarricadeD2) {
+                bestBarricadeD2 = d2;
+                bestBarricade = be;
+                barricadeTargetPlayer = nearestPlayer;
+            }
+        }
+
+        if (bestBarricade.isValid() && bestBarricadeD2 <= DOOR_TARGET_RANGE2) {
+            auto* bxf = m_world.tryGet<TransformComponent>(bestBarricade);
+            if (bxf) {
+                ai->targetX = bxf->x;
+                ai->targetY = bxf->y;
+                ai->targetNetID = barricadeTargetPlayer.netID;
+                ai->targetDoorID = -1;
+                if (ai->state == ZombieState::Idle || ai->state == ZombieState::Alert) {
+                    ai->state = ZombieState::Chase;
+                    ai->stateTimer = 0.0f;
+                }
+            }
+        }
+
+        if (bestBarricade.isValid() && bestBarricadeD2 <= DOOR_ATTACK_RANGE2) {
+            auto* bhp = m_world.tryGet<HealthComponent>(bestBarricade);
+            float damagePerSecond = 10.0f;
+            if (ai->type == ZombieType::Runner) damagePerSecond = 14.0f;
+            else if (ai->type == ZombieType::Brute) damagePerSecond = 28.0f;
+            if (ai->state == ZombieState::Frenzy) damagePerSecond *= 1.35f;
+
+            if (bhp && bhp->isAlive) {
+                m_combat.applyDamage(m_world, bestBarricade, zombie,
+                                     damagePerSecond * dt, DamageType::Melee);
+                if (!bhp->isAlive) {
+                    for (EntityID zid : m_world.alive()) {
+                        Entity nearZombie{zid};
+                        auto* zai = m_world.tryGet<ZombieAIComponent>(nearZombie);
+                        auto* zhp = m_world.tryGet<HealthComponent>(nearZombie);
+                        auto* zxf = m_world.tryGet<TransformComponent>(nearZombie);
+                        if (!zai || !zhp || !zhp->isAlive || !zxf) continue;
+                        const float pdx = barricadeTargetPlayer.x - zxf->x;
+                        const float pdy = barricadeTargetPlayer.y - zxf->y;
+                        if (pdx * pdx + pdy * pdy > PLAYER_DOOR_AGGRO_RANGE2) continue;
+                        zai->targetX = barricadeTargetPlayer.x;
+                        zai->targetY = barricadeTargetPlayer.y;
+                        zai->targetNetID = barricadeTargetPlayer.netID;
+                        zai->targetDoorID = -1;
+                        zai->state = ZombieState::Chase;
+                        zai->stateTimer = 0.0f;
+                    }
+                }
+            }
+        }
+
         if (bestDoor < 0) continue;
 
         float damagePerSecond = 10.0f;
@@ -1374,7 +1485,9 @@ void GameServer::onSelectWeaponReq(uint32_t peerIdx, uint8_t slot) {
         if (!inv) return;
 
         Item& selected = inv->equipped[slot];
-        if (!selected.isValid() || selected.category != ItemCategory::Weapon) return;
+        if (!selected.isValid() ||
+            (selected.category != ItemCategory::Weapon &&
+             selected.category != ItemCategory::Throwable)) return;
 
         inv->activeWeaponSlot = (slot == 0) ? EquipSlot::PrimaryWeapon
                                             : EquipSlot::SecondaryWeapon;

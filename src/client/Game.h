@@ -142,6 +142,8 @@ private:
     float m_attackTimer    = 0.0f;
     float m_attackAngle    = 0.0f;
     float m_footstepTimer  = 0.0f;
+    bool  m_molotovCharging = false;
+    float m_molotovCharge   = 0.0f;
 
     // 게임 연출 (Juice)
     float m_cameraShakeTimer = 0.0f;

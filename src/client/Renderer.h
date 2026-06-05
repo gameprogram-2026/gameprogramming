@@ -57,6 +57,7 @@ struct ClientInventory {
     InventoryItem gridSlots[20];       // 최대 20 슬롯
     InventoryItem stashSlots[40];      // 40 스태시 슬롯
     InventoryItem primaryWeapon;
+    InventoryItem secondaryWeapon;
     int           money        = 0;
     float         totalWeight  = 0.0f;
     float         maxWeight    = 150.0f;
@@ -71,6 +72,10 @@ struct ClientInventory {
             if (name.find(k) != std::string::npos) return true;
         }
         return false;
+    }
+
+    static bool isEquipItem(const std::string& name) {
+        return isWeaponItem(name) || name == "molotov";
     }
 
     bool addItem(const InventoryItem& item) {
@@ -153,6 +158,7 @@ public:
     void spawnMuzzleFlash(float x, float y, float angle);
     void spawnCasing(float x, float y, float aimAngle);
     void spawnMeleeArc(float x, float y, float angle);
+    void spawnThrownMolotov(float fromX, float fromY, float toX, float toY);
     void spawnBloodStain(float x, float y);
     void spawnHealEffect(float x, float y);
     void spawnFlameEffect(float x, float y, float angle);

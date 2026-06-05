@@ -204,8 +204,20 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         if (doorTargetActive) {
             ai.stateTimer = 0.0f;
         } else {
-            // 매 틱 가장 가까운 적 재탐색 (타깃 사망 처리)
-            Entity target = findNearestEnemy(world, zombie);
+            Entity target{NULL_ENTITY};
+            if (ai.targetNetID != 0) {
+                for (EntityID id : world.alive()) {
+                    Entity e{id};
+                    auto* net = world.tryGet<NetworkComponent>(e);
+                    auto* hp = world.tryGet<HealthComponent>(e);
+                    if (net && hp && hp->isAlive && net->netID == ai.targetNetID) {
+                        target = e;
+                        break;
+                    }
+                }
+            }
+            // 매 틱 가장 가까운 적 재탐색 (기존 타겟이 죽었을 때만 변경)
+            if (!target.isValid()) target = findNearestEnemy(world, zombie);
             if (target.isValid()) {
                 auto* txf  = world.tryGet<TransformComponent>(target);
                 auto* tnet = world.tryGet<NetworkComponent>(target);
@@ -579,7 +591,7 @@ Entity ZombieAISystem::findNearestEnemy(World& world, Entity zombie) {
 
         float dx = xf->x - zxf->x, dy = xf->y - zxf->y;
         float d  = std::sqrt(dx*dx + dy*dy);
-        if (d < nearDist && d < 600.0f) {
+        if (d < nearDist && d < 960.0f) {
             bool hitWall = false;
             if (m_map) {
                 int steps = static_cast<int>(d / 16.0f); // Check every 16 pixels (half tile)

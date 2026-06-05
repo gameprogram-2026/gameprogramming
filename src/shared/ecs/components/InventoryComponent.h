@@ -88,6 +88,13 @@ struct InventoryComponent {
         return equipped[static_cast<int>(activeWeaponSlot)];
     }
 
+    static float carriedWeight(const Item& item) noexcept {
+        if (!item.isValid()) return 0.0f;
+        return item.category == ItemCategory::Weapon
+                   ? item.weight
+                   : item.weight * item.quantity;
+    }
+
     bool isFull() const noexcept {
         return usedSlots >= INVENTORY_GRID_SLOTS ||
                currentWeight >= maxCarryWeight;
@@ -99,7 +106,7 @@ struct InventoryComponent {
         for (const auto& slot : slots) {
             if (!slot.isValid()) continue;
             ++usedSlots;
-            currentWeight += slot.weight * slot.quantity;
+            currentWeight += carriedWeight(slot);
         }
     }
 
@@ -108,7 +115,7 @@ struct InventoryComponent {
         if (!item.isValid() || item.quantity <= 0) return false;
 
         recalculateGridStats();
-        float addedWeight = item.weight * item.quantity;
+        float addedWeight = carriedWeight(item);
         if (currentWeight + addedWeight > maxCarryWeight) return false;
 
         for (auto& slot : slots) {
