@@ -93,6 +93,8 @@ void Renderer::shutdown() {
 }
 
 void Renderer::beginFrame() {
+    SDL_RenderSetClipRect(m_renderer, nullptr); // 이전 프레임 클립 초기화
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(m_renderer, Col::BG.r, Col::BG.g, Col::BG.b, 255);
     SDL_RenderClear(m_renderer);
 }

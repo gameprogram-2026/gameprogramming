@@ -1109,7 +1109,7 @@ void Game::processEvents() {
         int zoomWheel = m_input.consumeWheel();
         if (zoomWheel != 0) {
             m_camera.zoom *= std::pow(1.15f, static_cast<float>(zoomWheel));
-            m_camera.zoom = std::max(0.5f, std::min(3.0f, m_camera.zoom));
+            m_camera.zoom = std::max(1.0f, std::min(3.0f, m_camera.zoom));
         }
     }
 
