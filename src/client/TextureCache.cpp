@@ -104,13 +104,12 @@ void TextureCache::loadItemIcons() {
 
     // 8×2 실제 레이아웃:
     // Row 0: scrap_pipe nail_bat fire_axe pistol_9mm flamethrower molotov ammo_9mm medkit
-    // Row 1: bandage food_can scrap_metal plank/electronic_part/oil/wood [empty]
+    // Row 1: bandage food_can scrap_metal plank electronic_part oil wood [empty]
     struct { const char* key; int col; int row; } cells[] = {
         {"icon_scrap_pipe",      0, 0},
         {"icon_nail_bat",        1, 0},
         {"icon_fire_axe",        2, 0},
         {"icon_pistol_9mm",      3, 0},
-        {"icon_smg_9mm",         3, 0},
         {"icon_flamethrower",    4, 0},
         {"icon_molotov",         5, 0},
         {"icon_ammo_9mm",        6, 0},

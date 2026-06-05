@@ -1440,9 +1440,10 @@ void Game::update(float dt) {
     }
     
     // 타격 이벤트 처리 (원격 엔티티 피격 시)
+    // attackerID == 0 = 환경 데미지(태양/불) → 소리 무시 (20Hz 반복 방지)
     for (const auto& ev : m_net.damageEvents()) {
-        if (ev.victimID != m_net.localNetID()) {
-            m_audio.playSound("hit", 0.7f); // Play hit sound for other entities
+        if (ev.victimID != m_net.localNetID() && ev.attackerID > 0) {
+            m_audio.playSound("hit", 0.7f);
             for (int i = 0; i < m_net.remoteCount(); ++i) {
                 const auto& rem = m_net.remotes()[i];
                 if (rem.entityID == ev.victimID) {

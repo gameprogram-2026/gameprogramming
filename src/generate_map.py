@@ -1,277 +1,283 @@
-import json
-import random
-from pathlib import Path
+"""
+DeadZone City Ruins Map Generator
+격자형 도로 + 구역별 건물 + 문이 도로를 향함
+200×200 타일, 4구역(NW=주거 NE=상업 SW=군사 SE=공업)
+"""
+import json, random
 
+W, H = 200, 200
+GRASS, ROAD, WALL, DEBRIS, WOOD_FLOOR, ASH = 0, 1, 2, 3, 4, 5
 
-def generate_city_map():
-    width, height = 200, 200
-    grass, road, wall, debris, wood_floor, ash = 0, 1, 2, 3, 4, 5
-    main_roads_x = [5, 65, 100, 135, 195]
-    main_roads_y = [5, 65, 100, 135, 195]
-    main_w = 5
-    secondary_w = 3
+data = [GRASS] * (W * H)
 
-    districts = [
-        {"id": 0, "key": "residential", "label": "주거 구역", "theme": 0, "x": 0, "y": 0, "w": 100, "h": 100},
-        {"id": 1, "key": "commercial", "label": "상업 구역", "theme": 1, "x": 100, "y": 0, "w": 100, "h": 100},
-        {"id": 2, "key": "industrial", "label": "공업 구역", "theme": 2, "x": 100, "y": 100, "w": 100, "h": 100},
-        {"id": 3, "key": "military", "label": "군사 구역", "theme": 3, "x": 0, "y": 100, "w": 100, "h": 100},
-    ]
+def s(x, y):        return 0 <= x < W and 0 <= y < H
+def g(x, y):        return data[y*W+x] if s(x,y) else GRASS
+def t(x, y, v):
+    if s(x,y): data[y*W+x] = v
 
-    data = [grass] * (width * height)
+def rect(x, y, w, h, v):
+    for j in range(y, y+h):
+        for i in range(x, x+w):
+            t(i, j, v)
 
-    def in_bounds(x, y):
-        return 0 <= x < width and 0 <= y < height
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. 격자형 도로망
+# ─────────────────────────────────────────────────────────────────────────────
+# 주 도로(폭 5): x/y = 5, 65, 100, 135, 195 → 5개 선
+# 블록 크기: 주도로 사이 ~55타일 → 각 블록 내 보조도로 1개(폭 3)
+MAIN_ROADS_X = [5, 65, 100, 135, 195]
+MAIN_ROADS_Y = [5, 65, 100, 135, 195]
+MAIN_W = 5   # 주 도로 폭
+SEC_W  = 3   # 보조 도로 폭
 
-    def get_tile(x, y):
-        return data[y * width + x] if in_bounds(x, y) else grass
+# 주 도로 그리기
+for rx in MAIN_ROADS_X:
+    rect(rx, 0, MAIN_W, H, ROAD)
+for ry in MAIN_ROADS_Y:
+    rect(0, ry, W, MAIN_W, ROAD)
 
-    def set_tile(x, y, value):
-        if in_bounds(x, y):
-            data[y * width + x] = value
+# 보조 도로: 각 블록 중앙
+def mid_blocks(roads):
+    segs = []
+    for i in range(len(roads)-1):
+        a = roads[i] + MAIN_W
+        b = roads[i+1]
+        mid = (a + b) // 2
+        segs.append(mid)
+    return segs
 
-    def rect(x, y, w, h, value):
-        for tile_y in range(y, y + h):
-            for tile_x in range(x, x + w):
-                set_tile(tile_x, tile_y, value)
+SEC_X = mid_blocks(MAIN_ROADS_X)  # [37, 82, 117, 165]
+SEC_Y = mid_blocks(MAIN_ROADS_Y)
 
-    random.seed(42)
+for sx in SEC_X:
+    rect(sx, 0, SEC_W, H, ROAD)
+for sy in SEC_Y:
+    rect(0, sy, W, SEC_W, ROAD)
 
-    for road_x in main_roads_x:
-        rect(road_x, 0, main_w, height, road)
-    for road_y in main_roads_y:
-        rect(0, road_y, width, main_w, road)
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. 건물 배치
+# ─────────────────────────────────────────────────────────────────────────────
+def is_road_tile(x, y):
+    return s(x,y) and g(x,y) == ROAD
 
-    def mid_blocks(roads):
-        return [(roads[i] + main_w + roads[i + 1]) // 2 for i in range(len(roads) - 1)]
+def zone_theme(cx, cy):
+    """구역별 테마: NW=0주거, NE=1상업, SW=3군사, SE=2공업"""
+    if cx < 100 and cy < 100: return 0  # NW 주거
+    if cx >= 100 and cy < 100: return 1  # NE 상업
+    if cx < 100 and cy >= 100: return 3  # SW 군사
+    return 2                              # SE 공업
 
-    secondary_x = mid_blocks(main_roads_x)
-    secondary_y = mid_blocks(main_roads_y)
+def block_bounds():
+    """격자 블록(도로 사이 공간) 목록 반환"""
+    all_x = sorted(set(MAIN_ROADS_X + SEC_X + [0, W]))
+    all_y = sorted(set(MAIN_ROADS_Y + SEC_Y + [0, H]))
+    blocks = []
+    for i in range(len(all_x)-1):
+        for j in range(len(all_y)-1):
+            x1 = all_x[i]
+            y1 = all_y[j]
+            x2 = all_x[i+1]
+            y2 = all_y[j+1]
+            # 도로 타일이 있는 구간 건너뜀
+            # 블록 시작을 도로 끝으로 조정
+            bx = x1
+            by = y1
+            bw = x2 - x1
+            bh = y2 - y1
+            # 도로 폭 제거: 시작점이 도로면 넘기기
+            if g(bx, by + bh//2) == ROAD: bx += MAIN_W if bx in MAIN_ROADS_X else SEC_W
+            if g(bx + bw//2, by) == ROAD: by += MAIN_W if by in MAIN_ROADS_Y else SEC_W
+            bw = x2 - bx
+            bh = y2 - by
+            if bw > 8 and bh > 8:
+                blocks.append((bx, by, bw, bh))
+    return blocks
 
-    for road_x in secondary_x:
-        rect(road_x, 0, secondary_w, height, road)
-    for road_y in secondary_y:
-        rect(0, road_y, width, secondary_w, road)
+def can_place(x, y, w, h):
+    """건물 영역이 도로나 기존 건물과 겹치지 않는지 확인 (1타일 마진)"""
+    for j in range(y-1, y+h+1):
+        for i in range(x-1, x+w+1):
+            v = g(i, j)
+            if v in (ROAD, WALL, WOOD_FLOOR): return False
+    return True
 
-    def zone_theme(cx, cy):
-        if cx < 100 and cy < 100:
-            return 0
-        if cx >= 100 and cy < 100:
-            return 1
-        if cx >= 100 and cy >= 100:
-            return 2
-        return 3
+def place_building(x, y, w, h, theme):
+    """건물 배치: 바닥 + 외벽. 도로를 향한 면에 문 생성"""
+    rect(x, y, w, h, WOOD_FLOOR)
+    # 외벽
+    for i in range(x, x+w):
+        t(i, y,     WALL)
+        t(i, y+h-1, WALL)
+    for j in range(y, y+h):
+        t(x,     j, WALL)
+        t(x+w-1, j, WALL)
 
-    def block_bounds():
-        all_x = sorted(set(main_roads_x + secondary_x + [0, width]))
-        all_y = sorted(set(main_roads_y + secondary_y + [0, height]))
-        blocks = []
+    doors_added = []
 
-        for ix in range(len(all_x) - 1):
-            for iy in range(len(all_y) - 1):
-                x1, x2 = all_x[ix], all_x[ix + 1]
-                y1, y2 = all_y[iy], all_y[iy + 1]
-                bx, by = x1, y1
-                bw, bh = x2 - x1, y2 - y1
-
-                if get_tile(bx, by + bh // 2) == road:
-                    bx += main_w if bx in main_roads_x else secondary_w
-                if get_tile(bx + bw // 2, by) == road:
-                    by += main_w if by in main_roads_y else secondary_w
-
-                bw = x2 - bx
-                bh = y2 - by
-                if bw > 8 and bh > 8:
-                    blocks.append((bx, by, bw, bh))
-
-        return blocks
-
-    def can_place(x, y, w, h):
-        for tile_y in range(y - 1, y + h + 1):
-            for tile_x in range(x - 1, x + w + 1):
-                if get_tile(tile_x, tile_y) in (road, wall, wood_floor):
-                    return False
-        return True
-
-    def is_road_tile(x, y):
-        return in_bounds(x, y) and get_tile(x, y) == road
-
-    def place_building(x, y, w, h, theme):
-        rect(x, y, w, h, wood_floor)
-
-        for tile_x in range(x, x + w):
-            set_tile(tile_x, y, wall)
-            set_tile(tile_x, y + h - 1, wall)
-        for tile_y in range(y, y + h):
-            set_tile(x, tile_y, wall)
-            set_tile(x + w - 1, tile_y, wall)
-
-        doors_added = []
-
-        def add_horizontal_door(wall_y):
+    def add_door_on_side(wall_x_list, wall_y, horizontal=True):
+        """벽 한 면에 도로 접촉 여부 확인 후 문 추가"""
+        if horizontal:
+            # 북쪽/남쪽 벽: 벽 바깥이 도로인지 확인
             check_y = wall_y - 1 if wall_y == y else wall_y + 1
-            if not any(is_road_tile(tile_x, check_y) for tile_x in range(x + 1, x + w - 1)):
-                return
+            road_adjacent = any(is_road_tile(i, check_y) for i in range(x+1, x+w-1))
+            if road_adjacent:
+                mid = (x + x+w) // 2
+                door_x = mid if mid+1 < x+w-1 else mid-1
+                t(door_x,   wall_y, WOOD_FLOOR)
+                t(door_x+1, wall_y, WOOD_FLOOR)
+                doors_added.append((door_x, wall_y))
+                doors_added.append((door_x+1, wall_y))
+        else:
+            # 동쪽/서쪽 벽: 벽 바깥이 도로인지 확인
+            check_x = wall_x_list - 1 if wall_x_list == x else wall_x_list + 1
+            road_adjacent = any(is_road_tile(check_x, j) for j in range(y+1, y+h-1))
+            if road_adjacent:
+                mid = (y + y+h) // 2
+                door_y = mid if mid+1 < y+h-1 else mid-1
+                t(wall_x_list, door_y,   WOOD_FLOOR)
+                t(wall_x_list, door_y+1, WOOD_FLOOR)
+                doors_added.append((wall_x_list, door_y))
+                doors_added.append((wall_x_list, door_y+1))
 
-            door_x = (x + x + w) // 2
-            if door_x + 1 >= x + w - 1:
-                door_x -= 1
-            set_tile(door_x, wall_y, wood_floor)
-            set_tile(door_x + 1, wall_y, wood_floor)
-            doors_added.extend([(door_x, wall_y), (door_x + 1, wall_y)])
+    add_door_on_side(None, y,     horizontal=True)   # 북쪽 벽
+    add_door_on_side(None, y+h-1, horizontal=True)   # 남쪽 벽
+    add_door_on_side(x,     None, horizontal=False)  # 서쪽 벽
+    add_door_on_side(x+w-1, None, horizontal=False)  # 동쪽 벽
 
-        def add_vertical_door(wall_x):
-            check_x = wall_x - 1 if wall_x == x else wall_x + 1
-            if not any(is_road_tile(check_x, tile_y) for tile_y in range(y + 1, y + h - 1)):
-                return
+    # 도로와 전혀 안 붙어있으면 가장 가까운 면에 강제로 문 추가
+    if not doors_added:
+        mid_x = (x + x+w) // 2
+        t(mid_x, y, WOOD_FLOOR)      # 북쪽 강제 문
+        t(mid_x+1, y, WOOD_FLOOR)
 
-            door_y = (y + y + h) // 2
-            if door_y + 1 >= y + h - 1:
-                door_y -= 1
-            set_tile(wall_x, door_y, wood_floor)
-            set_tile(wall_x, door_y + 1, wood_floor)
-            doors_added.extend([(wall_x, door_y), (wall_x, door_y + 1)])
+    return {"x": x, "y": y, "w": w, "h": h, "theme": theme}
 
-        add_horizontal_door(y)
-        add_horizontal_door(y + h - 1)
-        add_vertical_door(x)
-        add_vertical_door(x + w - 1)
+buildings = []
+random.seed(42)  # 재현 가능한 맵
 
-        if not doors_added:
-            door_x = (x + x + w) // 2
-            set_tile(door_x, y, wood_floor)
-            set_tile(door_x + 1, y, wood_floor)
+# 구역별 건물 크기 범위
+SIZE_BY_THEME = {
+    0: ((7,14),  (6,11)),   # 주거: 작은 집들
+    1: ((10,20), (8,15)),   # 상업: 중형 빌딩
+    2: ((14,28), (10,22)),  # 공업: 대형 창고
+    3: ((12,24), (10,18)),  # 군사: 직사각 벙커
+}
 
-        return {"x": x, "y": y, "w": w, "h": h, "theme": theme}
+blocks = block_bounds()
+for (bx, by, bw, bh) in blocks:
+    if bw < 10 or bh < 10: continue
+    cx, cy = bx + bw//2, by + bh//2
+    theme = zone_theme(cx, cy)
+    (wmin, wmax), (hmin, hmax) = SIZE_BY_THEME[theme]
 
-    size_by_theme = {
-        0: ((7, 14), (6, 11)),
-        1: ((10, 20), (8, 15)),
-        2: ((14, 28), (10, 22)),
-        3: ((12, 24), (10, 18)),
-    }
-    limit_by_theme = {0: 10, 1: 7, 2: 8, 3: 8}
-    buildings = []
+    # 블록 크기에 맞게 건물 수 결정
+    area = bw * bh
+    n_buildings = 1 if area < 600 else (2 if area < 1800 else 3)
 
-    for bx, by, bw, bh in block_bounds():
-        if bw < 10 or bh < 10:
-            continue
+    for _ in range(n_buildings * 4):  # 배치 시도
+        if len([b for b in buildings if zone_theme(b['x']+b['w']//2, b['y']+b['h']//2)==theme]) >= {0:10,1:7,2:8,3:8}[theme]:
+            break
+        max_w = min(wmax, bw-4)
+        max_h = min(hmax, bh-4)
+        if max_w < wmin or max_h < hmin: break
+        bld_w = random.randint(wmin, max_w)
+        bld_h = random.randint(hmin, max_h)
+        margin = 2
+        rx = random.randint(bx+margin, bx+bw-bld_w-margin)
+        ry = random.randint(by+margin, by+bh-bld_h-margin)
+        if can_place(rx, ry, bld_w, bld_h):
+            b = place_building(rx, ry, bld_w, bld_h, theme)
+            buildings.append(b)
+            break
 
-        cx, cy = bx + bw // 2, by + bh // 2
-        theme = zone_theme(cx, cy)
-        (w_min, w_max), (h_min, h_max) = size_by_theme[theme]
-        area = bw * bh
-        attempts = (1 if area < 600 else 2 if area < 1800 else 3) * 4
-
-        for _ in range(attempts):
-            theme_count = sum(1 for building in buildings if zone_theme(building["x"] + building["w"] // 2, building["y"] + building["h"] // 2) == theme)
-            if theme_count >= limit_by_theme[theme]:
-                break
-
-            max_w = min(w_max, bw - 4)
-            max_h = min(h_max, bh - 4)
-            if max_w < w_min or max_h < h_min:
-                break
-
-            building_w = random.randint(w_min, max_w)
-            building_h = random.randint(h_min, max_h)
-            margin = 2
-            x = random.randint(bx + margin, bx + bw - building_w - margin)
-            y = random.randint(by + margin, by + bh - building_h - margin)
-
-            if can_place(x, y, building_w, building_h):
-                buildings.append(place_building(x, y, building_w, building_h, theme))
-                break
-
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. 구역별 환경 디테일
+# ─────────────────────────────────────────────────────────────────────────────
+def add_zone_detail():
     for _ in range(600):
-        x = random.randint(0, width - 1)
-        y = random.randint(0, height - 1)
-        if get_tile(x, y) != grass:
-            continue
-
+        x = random.randint(0, W-1)
+        y = random.randint(0, H-1)
+        if g(x, y) != GRASS: continue
         theme = zone_theme(x, y)
-        if theme == 2 and random.random() < 0.4:
-            set_tile(x, y, debris)
-        elif theme == 3 and random.random() < 0.3:
-            set_tile(x, y, ash)
-        elif theme == 1 and random.random() < 0.15:
-            set_tile(x, y, debris)
+        if theme == 2:   # 공업: 잔해/파편
+            if random.random() < 0.4: t(x, y, DEBRIS)
+        elif theme == 3: # 군사: 재
+            if random.random() < 0.3: t(x, y, ASH)
+        elif theme == 1: # 상업: 가끔 잔해
+            if random.random() < 0.15: t(x, y, DEBRIS)
 
-    def open_area_near(cx, cy, size=4):
-        for radius in range(0, 30, 2):
-            for dx in range(-radius, radius + 1, 2):
-                for dy in range(-radius, radius + 1, 2):
-                    x, y = cx + dx, cy + dy
-                    if not (2 <= x < width - size - 2 and 2 <= y < height - size - 2):
-                        continue
-                    if all(get_tile(x + ox, y + oy) in (grass, road) for ox in range(size) for oy in range(size)):
-                        return x, y
-        return cx, cy
+add_zone_detail()
 
-    extraction_zones = []
-    for zone_id, (cx, cy) in enumerate([(35, 35), (155, 35), (155, 165), (35, 165)]):
-        x, y = open_area_near(cx, cy, 4)
-        for ox in range(4):
-            for oy in range(4):
-                set_tile(x + ox, y + oy, road)
-        extraction_zones.append({
-            "id": zone_id,
-            "tileX": x,
-            "tileY": y,
-            "w": 4,
-            "h": 4,
-            "label": ["Alpha Extract", "Bravo Extract", "Charlie Extract", "Delta Extract"][zone_id],
-        })
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. 탈출존 — 각 구역 중심 도로 교차점
+# ─────────────────────────────────────────────────────────────────────────────
+def open_area_near(cx, cy, size=4):
+    for r in range(0, 30, 2):
+        for dx in range(-r, r+1, 2):
+            for dy in range(-r, r+1, 2):
+                tx, ty = cx+dx, cy+dy
+                if not (2 <= tx < W-size-2 and 2 <= ty < H-size-2): continue
+                if all(g(tx+i, ty+j) in (GRASS, ROAD) for i in range(size) for j in range(size)):
+                    return tx, ty
+    return cx, cy
 
-    def find_spawn(cx, cy):
-        for radius in range(0, 25):
-            for dx in range(-radius, radius + 1):
-                for dy in range(-radius, radius + 1):
-                    if abs(dx) != radius and abs(dy) != radius:
-                        continue
-                    x, y = cx + dx, cy + dy
-                    if in_bounds(x, y) and get_tile(x, y) in (grass, road):
-                        return x, y
-        return cx, cy
+ez_centers = [(35, 35), (155, 35), (35, 165), (155, 165)]
+extraction_zones = []
+for idx, (ecx, ecy) in enumerate(ez_centers):
+    ex, ey = open_area_near(ecx, ecy, 4)
+    for i in range(4):
+        for j in range(4):
+            t(ex+i, ey+j, ROAD)
+    extraction_zones.append({"id": idx, "tileX": ex, "tileY": ey, "w": 4, "h": 4,
+                              "label": ["Alpha","Bravo","Charlie","Delta"][idx]+" Extract"})
 
-    player_spawns = [
-        {"team": index + 1, "x": x, "y": y}
-        for index, (x, y) in enumerate(find_spawn(cx, cy) for cx, cy in [(10, 10), (185, 10), (185, 185), (10, 185)])
-    ]
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. 플레이어 스폰 — 각 구역 코너, 도로 위
+# ─────────────────────────────────────────────────────────────────────────────
+def find_spawn(cx, cy):
+    for r in range(0, 25):
+        for dx in range(-r, r+1):
+            for dy in range(-r, r+1):
+                if abs(dx)!=r and abs(dy)!=r: continue
+                tx, ty = cx+dx, cy+dy
+                if s(tx,ty) and g(tx,ty) in (GRASS, ROAD):
+                    return tx, ty
+    return cx, cy
 
-    map_dict = {
-        "map": {
-            "name": "City Ruins",
-            "tileSize": 32,
-            "width": width,
-            "height": height,
-            "tileset": "assets/sprites/tileset.png",
-            "districts": districts,
-            "extractionZones": extraction_zones,
-            "buildings": buildings,
-            "playerSpawns": player_spawns,
-            "zombieSpawns": [],
-            "tileTypes": {
-                "0": {"name": "grass", "solid": False, "flammable": False},
-                "1": {"name": "road", "solid": False, "flammable": False},
-                "2": {"name": "wall", "solid": True, "flammable": False},
-                "3": {"name": "debris", "solid": False, "flammable": True},
-                "4": {"name": "wood_floor", "solid": False, "flammable": True},
-                "5": {"name": "ash", "solid": False, "flammable": False},
-            },
-            "layers": [{"name": "base", "comment": "City layout", "data": data}],
-        }
-    }
+spawn_corners = [(10, 10), (185, 10), (10, 185), (185, 185)]
+player_spawns = [{"team": i+1, "x": x, "y": y}
+                 for i, (x, y) in enumerate(find_spawn(*c) for c in spawn_corners)]
 
-    output_path = Path(__file__).resolve().parents[1] / "data" / "map.json"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as file:
-        json.dump(map_dict, file, separators=(",", ":"))
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. 저장
+# ─────────────────────────────────────────────────────────────────────────────
+map_dict = {
+  "map": {
+    "name": "City Ruins",
+    "tileSize": 32,
+    "width": W, "height": H,
+    "tileset": "assets/sprites/tileset.png",
+    "extractionZones": extraction_zones,
+    "buildings": buildings,
+    "playerSpawns": player_spawns,
+    "zombieSpawns": [],
+    "tileTypes": {
+      "0": {"name":"grass",      "solid":False,"flammable":False},
+      "1": {"name":"road",       "solid":False,"flammable":False},
+      "2": {"name":"wall",       "solid":True, "flammable":False},
+      "3": {"name":"debris",     "solid":False,"flammable":True },
+      "4": {"name":"wood_floor", "solid":False,"flammable":True },
+      "5": {"name":"ash",        "solid":False,"flammable":False}
+    },
+    "layers": [{"name":"base","data":data}]
+  }
+}
 
-    theme_counts = {theme: sum(1 for building in buildings if building["theme"] == theme) for theme in range(4)}
-    print(f"Map generated successfully with {len(buildings)} buildings: {output_path}")
-    print(f"District buildings: residential={theme_counts[0]} commercial={theme_counts[1]} industrial={theme_counts[2]} military={theme_counts[3]}")
+out_path = "/Users/gimseongjun/Desktop/DeadZone/data/map.json"
+with open(out_path, "w") as f:
+    json.dump(map_dict, f, separators=(',',':'))
 
-
-if __name__ == "__main__":
-    generate_city_map()
+theme_counts = {i: sum(1 for b in buildings if b['theme']==i) for i in range(4)}
+print(f"맵 생성 완료: 건물 {len(buildings)}개")
+print(f"  주거(NW)={theme_counts[0]} 상업(NE)={theme_counts[1]} 공업(SE)={theme_counts[2]} 군사(SW)={theme_counts[3]}")
+print(f"  탈출존 {len(extraction_zones)}개, 스폰 {len(player_spawns)}개")

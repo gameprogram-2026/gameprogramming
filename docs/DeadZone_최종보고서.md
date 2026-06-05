@@ -1,0 +1,735 @@
+# [최종 보고서] DeadZone 프로젝트
+
+**팀원 A**: 서버 및 게임 로직 구현  
+**팀원 B**: 클라이언트, 데이터 및 보고서 작성  
+
+---
+
+## 1장. 게임 소개
+
+### 1.1 개요
+- **게임명**: DeadZone
+- **장르**: 탑다운 좀비 서바이벌 멀티플레이어
+- **핵심 컨셉**: 4팀(각 2인)으로 구성된 플레이어들이 폐허가 된 도시에서 좀비의 위협을 피해 생존하며, 궁극적으로 탈출존을 통해 무사히 탈출하는 서바이벌 게임입니다.
+
+### 1.2 팀 구성 및 역할
+- **팀원 A (서버·게임로직)**: ECS 기반 서버 구조 설계, 좀비 AI, Combat 시스템, Build 시스템, 탈출 및 네트워크 권한(Server Authority) 모델 구현 등 백엔드/로직 전담.
+- **팀원 B (클라이언트·데이터·보고서)**: 클라이언트 렌더링 파이프라인(SDL2), UI(인벤토리 드래그 앤 드롭), 파티클 이펙트, 데이터(JSON) 정리 및 보고서 작성 등 프론트엔드 및 데이터/문서 전담.
+
+---
+
+## 2장. 게임 기획 개요
+
+### 2.1 맵 구성
+- **City Ruins (200×200 타일)**: 거대한 폐허 도시를 배경으로 하며, 크게 3개의 구역(주거 구역, 쇼핑몰, 산업 구역)으로 나뉘어 각기 다른 파밍 경험과 위험도를 제공합니다.
+- **스폰 시스템**: 4개의 팀이 맵의 4코너에 분산되어 스폰하며, 초반 생존과 파밍을 위해 각자의 거점을 확보해야 합니다.
+
+> **[그림 1]** 맵 전체 구역 다이어그램
+> *(여기에 맵 다이어그램 스크린샷을 삽입해주세요)*
+
+### 2.2 핵심 메카닉
+1. **노이즈 시스템**: 총격, 발소리, 건설 등 플레이어의 행동마다 고유의 소음 반경(noiseRadius)이 발생하여, 주변 좀비들의 어그로를 끌게 됩니다.
+2. **연합 및 배신 시스템**: 타 팀과 핸드셰이크를 통해 임시 연합을 맺을 수 있으나, 언제든 아군 오인 사격(Friendly-fire)을 통해 배신할 수 있는 긴장감을 부여합니다.
+3. **건설 시스템**: 수집한 재료(고철, 판자, 전자 부품 등)를 활용하여 바리케이드와 포탑을 설치해 방어선을 구축할 수 있습니다.
+4. **탈출 시스템**: 게임 시작 5분(300초) 후 맵에 무작위(또는 지정된) 탈출존이 활성화되며, 해당 구역에서 5초간 채널링(F키)을 유지하면 탈출에 성공합니다.
+5. **자동 포탑 시스템**: 건설한 포탑이 설정된 사격 호(Arc) 범위 내에서 가장 가까운 적을 자동으로 조준하여 사격합니다.
+
+### 2.3 아이템 및 무기 체계
+- **등급 시스템**: Normal → Enhanced → Rare → Unique 순으로 아이템 가치가 나뉩니다.
+- **루트박스**: 실내외에 배치된 파밍 상자에서 탄약, 회복약(Medkit, Bandage), 재료, 총기류를 획득할 수 있습니다.
+
+> **[그림 2]** 아이템 및 무기 등급 체계 표
+> *(여기에 아이템 기획안 등급 표 이미지를 삽입해주세요)*
+
+---
+
+## 3장. 기술 아키텍처
+
+### 3.1 전체 구조
+클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버는 상태를 관리하고 MySQL 데이터베이스에 영속적 데이터를 저장합니다.
+
+> **[그림 3]** Client ↔ ENet UDP ↔ Server ↔ MySQL 통신 흐름도
+> *(여기에 통신 흐름도 이미지를 삽입해주세요)*
+
+### 3.2 자체 구현 ECS (Entity Component System)
+- `World` 클래스를 중심으로 동작하며, `ComponentPool<T>`를 통해 메모리 연속성을 보장해 캐시 히트율을 높였습니다.
+- 총 9종의 컴포넌트(Transform, Inventory, Health, ZombieAI 등)가 분리되어 유연한 객체 관리가 가능합니다.
+- 지연 파괴(Deferred Destruction) 및 Dirty Flag 동기화 방식을 도입해 다중 스레드 환경 및 네트워크 전송을 최적화했습니다.
+
+**[코드 스니펫: ComponentPool 메모리 구조]**
+```cpp
+template<typename T>
+class ComponentPool {
+public:
+    template<typename... Args>
+    T& emplace(EntityID id, Args&&... args) {
+        m_index[id] = static_cast<uint32_t>(m_data.size());
+        m_owners.push_back(id);
+        return m_data.emplace_back(std::forward<Args>(args)...);
+    }
+private:
+    std::vector<T>                          m_data;
+    std::vector<EntityID>                   m_owners;  // parallel to m_data
+    std::unordered_map<EntityID, uint32_t>  m_index;
+};
+```
+> **구현 설명**: `ComponentPool`은 `std::vector`를 기반으로 한 연속된 메모리 공간에 컴포넌트를 할당합니다. `m_index`를 통해 Entity ID로 빠른 접근이 가능하며, 컴포넌트 추가/삭제 시 벡터의 끝 요소를 빈 공간으로 스왑(Swap-and-Pop)하여 O(1) 복잡도와 캐시 히트율(Cache Hit Ratio)을 극대화했습니다.
+
+> **[그림 4]** ECS World/ComponentPool 구조도
+> *(여기에 ECS 구조도 다이어그램을 삽입해주세요)*
+
+### 3.3 네트워크 권한 모델
+- **서버 권한 (Server Authority)**: 모든 중요한 로직과 상태 판정은 서버에서 수행하여 클라이언트 변조(핵)를 방지합니다.
+- **클라이언트 사이드 예측 및 서버 롤백**: 클라이언트의 조작에 즉각적으로 반응하여 지연 시간(Lag)을 숨기고, 서버의 결과가 다를 경우 롤백(Rollback)하여 보정합니다.
+- **채널 분리**: ENet의 `CHAN_RELIABLE`과 `CHAN_UNRELIABLE`을 분리해 중요한 이벤트와 잦은 상태 업데이트(좌표 등)의 트래픽을 효율적으로 관리했습니다.
+
+**[코드 스니펫: 서버-클라이언트 패킷 프로토콜 구조 (Protocol.h)]**
+```cpp
+// 1바이트 크기의 패킷 헤더 (모든 메시지의 선두에 위치)
+struct PktHeader {
+    PacketType type;
+    uint32_t   tick;       // 서버 동기화용 틱(Tick) 번호
+};
+
+// 클라이언트 -> 서버 (CHAN_UNRELIABLE, 약 64Hz 전송)
+struct PktC2SInput {
+    PktHeader header;
+    uint32_t  seqNum;      // 클라이언트 사이드 예측(CSP) 보정용 시퀀스 번호
+    float     moveX, moveY;// 정규화된 이동 벡터 [-1, 1]
+    float     aimAngle;    // 마우스 조준 각도 (0~360도)
+    uint16_t  actionFlags; // 비트마스크 (ACT_SHOOT | ACT_SPRINT | ACT_RELOAD 등)
+};
+
+// 서버 -> 클라이언트 (CHAN_UNRELIABLE, 약 20Hz 전송)
+struct PktEntityState {
+    uint32_t netID;
+    float    x, y;
+    float    rotation;
+    float    hp;
+    uint8_t  animFrame;
+    uint8_t  flags;        // 상태 플래그 (isAlive, isSprinting, isBleeding 등)
+};
+```
+> **구현 설명**: 클라이언트와 서버가 주고받는 데이터는 결코 단순하지 않습니다. 대역폭을 최적화하기 위해 `#pragma pack(push, 1)`을 사용하여 구조체의 메모리 패딩(Padding)을 제거했습니다. 
+클라이언트는 1초에 64번씩 마우스 조준 각도(`aimAngle`), 이동 벡터(`moveX, Y`), 그리고 사격이나 달리기 같은 행동을 16비트의 `actionFlags` 비트마스크로 압축하여 서버로 보냅니다. 서버는 이를 바탕으로 물리 연산과 권한 검증을 마친 뒤, `PktEntityState` 구조체에 체력, 애니메이션 프레임, 상태 플래그 등을 촘촘하게 압축하여 클라이언트들에게 브로드캐스트합니다. 이 외에도 데미지 이벤트(`PktDamageEvent`), 인벤토리 전송(`PktStashTransfer`), 건축/동맹 요청 등 40여 가지의 패킷 타입(`PacketType`)을 정의하여 게임 내 모든 상호작용을 처리합니다.
+
+**[코드 스니펫: 월드 스냅샷 최적화 브로드캐스팅 (NetworkSystem.cpp)]**
+```cpp
+void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
+    // 1. SnapshotHeader 구조체와 가변 배열(EntityStateRecord) 버퍼 할당
+    static uint8_t buf[sizeof(SnapshotHeader) + 512 * sizeof(EntityStateRecord)];
+    auto* header = reinterpret_cast<SnapshotHeader*>(buf);
+    auto* records = reinterpret_cast<EntityStateRecord*>(buf + sizeof(SnapshotHeader));
+
+    int count = 0;
+    // 2. 네트워크 컴포넌트를 가진 모든 엔티티를 순회하며 Dirty 상태인 경우에만 직렬화
+    for (EntityID id : world.alive()) {
+        if (net->isDirty(DIRTY_TRANSFORM)) {
+            records[count].entityID = net->netID;
+            records[count].x = xf->x;
+            records[count].y = xf->y;
+            records[count].computeChecksum(); // 위변조 방지 체크섬 생성
+            ++count;
+        }
+    }
+    
+    // 3. CHAN_UNRELIABLE(빠른 상태 전송)을 통해 접속 중인 모든 클라이언트에 브로드캐스트
+    ENetPacket* peerPkt = enet_packet_create(buf, totalLen, 0);
+    for (int i = 0; i < m_peerCount; ++i) {
+        enet_peer_send(m_peers[i].peer, CHAN_UNRELIABLE, peerPkt);
+    }
+}
+```
+> **구현 설명**: 매 틱마다 서버 월드의 모든 객체를 보내면 대역폭 낭비가 매우 큽니다. 따라서 위치나 상태가 변경된(`Dirty`) 엔티티만 수집하여 가변 길이의 `EntityStateRecord` 배열로 직렬화합니다. `CHAN_UNRELIABLE` 채널을 이용해 패킷 유실을 감수하더라도 가장 최신의 좌표를 최단 시간 내에 브로드캐스트하도록 멀티플레이어 환경을 최적화했습니다.
+
+**[코드 스니펫: 클라이언트 사이드 예측 및 롤백 (NetworkClient.cpp)]**
+```cpp
+void NetworkClient::reconcile(uint16_t ackedSeq, float serverX, float serverY) {
+    for (int i = 0; i < m_predCount; ++i) {
+        int idx = (m_predHead + i) % PREDICTION_BUFFER;
+        if (m_predBuf[idx].seqNum != ackedSeq) continue;
+
+        float dx = serverX - m_predBuf[idx].x;
+        float dy = serverY - m_predBuf[idx].y;
+        float err = std::sqrt(dx*dx + dy*dy);
+
+        // 오차가 임계값 이내면 기존 예측 유지 (서버 상태 수용)
+        if (err < RECONCILE_THRESHOLD) {
+            m_predHead = (m_predHead + i + 1) % PREDICTION_BUFFER;
+            m_predCount -= (i + 1);
+            return;
+        }
+
+        // 오차가 크면 서버 위치로 강제 스냅(Snap) 후 큐에 남은 입력 재적용
+        m_localX = serverX;
+        m_localY = serverY;
+        m_predHead = (m_predHead + i + 1) % PREDICTION_BUFFER;
+        m_predCount -= (i + 1);
+        replayInputsFrom(ackedSeq + 1);
+        return;
+    }
+}
+```
+> **구현 설명**: 클라이언트가 입력을 서버로 전송함과 동시에 로컬에서 먼저 시뮬레이션(Prediction)합니다. 서버로부터 스냅샷을 받으면 `reconcile`을 호출하여 과거 예측 위치와 서버의 실제 위치 오차를 계산하고, 틀어졌을 경우(롤백) 현재까지의 입력들을 다시 재적용(Replay)하여 부드러운 이동을 보장합니다.
+
+---
+
+## 4장. 핵심 시스템 구현
+
+### 4.1 ZombieAI (FSM 및 감각 시스템)
+- **상태 전이**: `Idle` → `Alert` → `Chase` → `Frenzy` 단계로 동작합니다.
+- **유형**: 기본 체력/속도를 가진 Shambler, 이동 속도가 빠른 Runner, 맷집이 강한 Brute 3종으로 세분화됩니다.
+- 시야각(LOS) 검사와 노이즈 청각 시스템을 복합적으로 활용하여 자연스러운 추적 AI를 구현했습니다.
+
+**[코드 스니펫: 좀비의 시야(LOS) 판정 및 출혈 후각 추적 (ZombieAI.cpp)]**
+```cpp
+// 플레이어와의 거리 계산 및 밤/낮에 따른 시야 범위(sightMult) 설정
+float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
+float sightMult = isNight ? 3.0f : 0.4f;
+
+// 대상이 출혈(Bleeding) 상태일 경우 피 냄새를 맡고 감지 반경이 2배로 증가
+if (ncbt && ncbt->isBleeding) sightMult *= 2.0f;
+float sightR = ZOMBIE_SIGHT_RADIUS * sightMult;
+
+if (dx*dx + dy*dy < sightR * sightR) {
+    bool hasLOS = true;
+    float dist = std::sqrt(dx*dx + dy*dy);
+    int steps = static_cast<int>(dist / 16.0f); // 16픽셀 단위 레이캐스트(Raycast)
+    
+    // 플레이어와 좀비 사이에 벽(Solid)이 있는지 검사하여 벽 투시(Wallhack) 방지
+    for (int i = 1; i < steps; ++i) {
+        float cx = xf->x + dx * (static_cast<float>(i) / steps);
+        float cy = xf->y + dy * (static_cast<float>(i) / steps);
+        if (m_map->isSolid(TileMap::worldToTile(cx), TileMap::worldToTile(cy))) {
+            hasLOS = false; break;
+        }
+    }
+
+    if (hasLOS) { // 시야가 확보되었다면 추적(Chase) 상태로 전환
+        ai.targetX = nxf->x; ai.targetY = nxf->y;
+        if (ai.state == ZombieState::Idle) ai.state = ZombieState::Chase;
+    }
+}
+```
+> **구현 설명**: 단순히 거리만 가까워졌다고 플레이어를 인식하면 좀비가 벽 너머를 투시하는 불합리함이 생깁니다. 이를 방지하기 위해 16픽셀 단위로 선을 긋는 **Raycast(시선 확보) 연산**을 수행하여 시야에 장애물이 없는지 판별합니다. 또한 밤에는 좀비의 시야 반경이 3배 늘어나며, 플레이어가 좀비에게 맞아 출혈(Bleeding) 디버프가 걸린 경우 **피 냄새를 맡고 감지 반경이 2배로 증폭**되는 디테일한 후각 추적 기믹을 추가하여 하드코어 생존 게임의 긴장감을 극대화했습니다.
+
+**[코드 스니펫: 좀비 상태 전이 로직 일부]**
+```cpp
+switch (ai.state) {
+case ZombieState::Idle:
+    if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Deafening)) {
+        ai.state = ZombieState::Frenzy;
+        ai.chainTriggered = false;
+    } else if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Loud)) {
+        ai.state = ZombieState::Chase;
+    } else if (maxNoise >= static_cast<uint8_t>(NoiseCategory::Soft)) {
+        ai.alertLevel += 0.4f;
+        if (ai.alertLevel >= 1.0f) ai.state = ZombieState::Alert;
+    }
+    break;
+case ZombieState::Frenzy:
+    if (!ai.chainTriggered) {
+        ai.chainTriggered = true;
+        triggerChainFrenzy(world, zombie, xf->x, xf->y);
+    }
+    // ...
+```
+> **구현 설명**: 매 틱마다 `update` 함수가 호출되며, `switch(ai.state)` 구문을 통해 상태를 전이합니다. 특히 광란(Frenzy) 상태 돌입 시 `triggerChainFrenzy` 함수를 호출하여 반경 내의 다른 좀비들을 연쇄적으로 깨우는(Chain Aggro) 시스템을 구현하여, 한 번의 실수가 대규모 웨이브로 이어지도록 설계했습니다.
+
+**[코드 스니펫: 좀비 무리 이동(Flocking) 및 충돌 보정 (ZombieAI.cpp)]**
+```cpp
+void ZombieAISystem::doMovement(World& world, Entity zombie, ZombieAIComponent& ai, float dt) {
+    // ... [상태에 따른 목표 좌표(destX, destY)와 속도 설정] ...
+    float dx = destX - xf->x, dy = destY - xf->y;
+    float dist = std::sqrt(dx*dx + dy*dy);
+    float nx = dx / dist, ny = dy / dist;
+
+    // 1. 목표를 향해 이동하며 벽체 충돌(슬라이딩) 처리
+    xf->x += nx * speed * dt;
+    m_map->resolveAxisX(xf->x, xf->y, 10.0f, 10.0f);
+    xf->y += ny * speed * dt;
+    m_map->resolveAxisY(xf->x, xf->y, 10.0f, 10.0f);
+
+    // 2. 무리 행동(Flocking) - 좀비 간 겹침 방지(Separation)
+    float pushX = 0.0f, pushY = 0.0f;
+    for (EntityID id : world.alive()) {
+        // 주변 다른 좀비와의 거리를 계산하여 밀어내는 벡터 생성
+        float odx = xf->x - oxf->x, ody = xf->y - oxf->y;
+        float d2 = odx*odx + ody*ody;
+        if (d2 > 0.01f && d2 <= SEPARATION_R2) {
+            float strength = 1.0f - (std::sqrt(d2) / SEPARATION_RADIUS);
+            pushX += odx * (1.0f / std::sqrt(d2)) * strength;
+            pushY += ody * (1.0f / std::sqrt(d2)) * strength;
+        }
+    }
+    xf->x += pushX * 30.0f * dt;
+    xf->y += pushY * 30.0f * dt;
+}
+```
+> **구현 설명**: 좀비가 플레이어를 향해 이동할 때, 단순히 직선으로 쫓아오는 것을 넘어 **무리 지어 이동(Flocking)** 할 때 서로 겹쳐서 하나의 점처럼 뭉치지 않게 만드는 분리(Separation) 로직을 적용했습니다. 벽체와 충돌할 때는 자연스럽게 미끄러지도록 X/Y축을 분리하여 위치를 보정(`resolveAxis`)합니다.
+
+> **[그림 5]** ZombieAI FSM 상태전이 다이어그램
+> *(여기에 FSM 다이어그램을 삽입해주세요)*
+
+### 4.2 FireSystem (화염 전파)
+- 화염병 투척 시 BFS(너비 우선 탐색) 알고리즘을 사용해 화염이 타일 단위로 번져나갑니다.
+- 설치된 포탑 등과 상호작용하여 연쇄 폭발을 일으키는 등 동적인 환경 변화를 유도합니다.
+
+**[코드 스니펫: BFS 기반 화염 전파 알고리즘]**
+```cpp
+void FireSystem::spreadBFS(World& world, TileMap& map) {
+    if (m_frontier.empty()) return;
+    std::vector<std::pair<int16_t, int16_t>> currentFrontier = m_frontier;
+    m_frontier.clear();
+
+    for (const auto& ft : currentFrontier) {
+        for (auto [dx, dy] : NEIGHBORS) {
+            int16_t nx = ft.first + dx, ny = ft.second + dy;
+            if (!map.inBounds(nx, ny) || m_tileSet.count(fireTileKey(nx, ny))) continue;
+
+            if (map.isFlammable(nx, ny)) {
+                igniteTile(nx, ny);
+                map.burnTile(nx, ny);
+                checkBuildingContact(world, map, nx, ny);
+            }
+        }
+    }
+}
+```
+> **구현 설명**: 매 `FIRE_SPREAD_INTERVAL` 주기로 호출되며, 화염의 최전선(`m_frontier`)에서 상하좌우 인접 타일을 검사합니다. 가연성 타일(나무, 데브리)일 경우 `igniteTile`을 호출하여 불을 붙이고 `m_frontier`에 편입시킵니다. `checkBuildingContact`를 통해 건물이나 포탑에 닿으면 즉시 파괴되거나 폭발하도록 처리했습니다.
+
+> **[그림 6]** FireSystem BFS 화염 전파 원리
+> *(여기에 BFS 화염 전파 원리 이미지를 삽입해주세요)*
+
+### 4.3 기타 주요 시스템
+
+#### Combat System (총기 사격 및 전투 판정)
+레이캐스트 기반의 사격 판정, AABB 기반 충돌, 출혈(DoT) 메카닉 등을 관리합니다.
+
+**[코드 스니펫: 총기 사격 레이캐스트 판정 (GameLogic.cpp)]**
+```cpp
+void GameLogic::handleRangedFire(uint32_t ownerID, float aimAngle) {
+    // ... [무기 정보 및 재장전 확인 로직] ...
+    
+    // Raycast: 조준 방향(aimAngle)으로 단계별(STEP)로 전진하며 충돌 확인
+    float rad  = aimAngle * (PI / 180.0f);
+    float dirX = std::sin(rad), dirY = -std::cos(rad);
+
+    for (float t = STEP; t <= MAX_R; t += STEP) {
+        float bx = xf->x + dirX * t;
+        float by = xf->y + dirY * t;
+
+        // 1. 엔티티 충돌 판정
+        for (EntityID tid : m_world.alive()) {
+            if (dx*dx + dy*dy < HIT_R2) {
+                m_combat.applyDamage(m_world, target, e, stats.damage, DamageType::Bullet);
+                m_onRangedFire(net->netID, xf->x, xf->y, bx, by, hp->team); // 총탄 궤적 이펙트 전송
+                goto done; // 관통 불가 시 종료
+            }
+        }
+
+        // 2. 타일(벽) 충돌 판정
+        if (m_map.isSolid(TileMap::worldToTile(bx), TileMap::worldToTile(by))) {
+            m_onRangedFire(net->netID, xf->x, xf->y, bx, by, hp->team);
+            break;
+        }
+    }
+done:;
+}
+```
+> **구현 설명**: 총을 쏘면 조준 각도를 기준으로 일정한 간격(`STEP`)씩 나아가면서 `Raycast` 연산을 수행합니다. 투사체를 생성하지 않고 즉시(Hitscan) 판정하며, 탄환이 다른 플레이어나 좀비(엔티티)의 반경 내에 들어가거나, 맵의 벽(Solid 타일)에 부딪히면 궤적 탐색을 멈추고 서버에서 직접 피해를 적용합니다. 통과할 수 없는 벽 뒤의 적은 맞지 않게 됩니다.
+
+**[코드 스니펫: 출혈 피해 로직 (CombatSystem.cpp)]**
+```cpp
+void CombatSystem::tickBleeding(World& world, float dt) {
+    auto& cbtPool = world.pool<CombatComponent>();
+    for (size_t i = 0; i < cbtPool.owners().size(); ++i) {
+        auto& cbt = cbtPool.data()[i];
+        if (!cbt.isBleeding) continue;
+
+        cbt.bleedTimer -= dt;
+        cbt.bleedAccumulator += cbt.bleedDps * dt;
+        while (cbt.bleedAccumulator >= 1.0f) {
+            hp->applyDamage(1.0f, DamageType::Melee);
+            cbt.bleedAccumulator -= 1.0f;
+        }
+    }
+}
+```
+> **구현 설명**: 출혈 상태일 때 매 틱마다 `bleedDps`에 따라 피해량이 누적되며, 1.0 이상이 될 때마다 정수 단위로 체력을 깎아 부동소수점 오차를 방지하고 정확하게 체력 감소를 클라이언트로 동기화합니다.
+
+#### Noise System (소음 → 좀비 어그로 파이프라인)
+게임 내 모든 행동(걷기, 달리기, 총격, 근접 공격 등)은 고유의 소음 반경을 가지며, 이 소음 이벤트는 실시간으로 좀비 AI에 전달됩니다.
+
+**[코드 스니펫: 행동별 소음 반경 및 이벤트 수확 파이프라인 (CombatComponent.h + NoiseSystem.cpp)]**
+```cpp
+// ── 1단계: 행동별 소음 반경 정의 (CombatComponent.h) ──
+constexpr float NOISE_WALK_RADIUS   =  48.0f;  // 걷기: 1.5m
+constexpr float NOISE_RUN_RADIUS    = 160.0f;  // 달리기: 5m
+constexpr float NOISE_MELEE_RADIUS  = 256.0f;  // 근접 공격: 8m
+constexpr float NOISE_PISTOL_RADIUS = 960.0f;  // 권총 발사: 30m
+constexpr float NOISE_RIFLE_RADIUS  =1280.0f;  // 소총 발사: 40m
+constexpr float NOISE_EXPLOSION_RADIUS=2880.0f; // 폭발: 90m → 즉시 Frenzy 유발
+
+// ── 2단계: 이동 시 발소리 소음 발생 (MovementSystem.cpp) ──
+if (cbt && (len > 0.01f)) {
+    float noiseR = sprinting ? NOISE_RUN_RADIUS : NOISE_WALK_RADIUS;
+    uint8_t cat  = sprinting ? 2 : 1; // Moderate : Soft
+    if (crouching) { noiseR = 0.0f; cat = 0; } // 웅크리기(Crouch) = 완전 무음
+    cbt->emitNoise(noiseR, cat);
+}
+
+// ── 3단계: NoiseSystem이 모든 엔티티의 소음을 수확하여 전역 이벤트 리스트에 등록 ──
+void NoiseSystem::update(World& world, float dt) {
+    // 기존 이벤트의 수명(TTL) 감소 후 만료된 이벤트 제거
+    for (auto& ev : m_events) ev.ttl -= dt;
+    m_events.erase(std::remove_if(m_events.begin(), m_events.end(),
+        [](const WorldNoiseEvent& e) { return e.ttl <= 0.0f; }), m_events.end());
+
+    // 이번 틱에 소음을 발생시킨 엔티티를 순회하여 전역 소음 이벤트로 변환
+    for (size_t i = 0; i < cbtPool.owners().size(); ++i) {
+        auto& cbt = cbtPool.data()[i];
+        if (!cbt.hasNoise) { cbt.clearNoise(); continue; }
+        auto* xf = xfPool.get(cbtPool.owners()[i]);
+        if (xf) m_events.push_back({xf->x, xf->y, cbt.noiseRadius, cbt.noiseCategory, 0.6f});
+        cbt.clearNoise(); // 1틱짜리 일회성 소음 플래그 초기화
+    }
+}
+```
+> **구현 설명**: 소음 시스템은 3단계 파이프라인으로 동작합니다. (1) 모든 행동에 `constexpr`로 고정된 소음 반경이 할당되어 있고, (2) 이동/사격/근접 공격 등의 로직에서 `emitNoise()`로 해당 틱의 소음을 등록하면, (3) `NoiseSystem::update()`가 매 틱마다 모든 엔티티의 소음 플래그를 수확하여 전역 `WorldNoiseEvent` 리스트에 좌표, 반경, 소음 카테고리와 함께 등록합니다. 좀비 AI(`ZombieAISystem`)는 이 리스트를 참조하여 상태 전이를 결정합니다. 웅크리기(Crouch) 시에는 소음이 0으로 설정되어 은밀한 플레이가 가능하며, 폭발(2880px)은 즉시 광란(Frenzy) 상태를 유발하는 등 행동마다 위험도가 세밀하게 차별화됩니다.
+
+#### Build System (건설 시스템)
+인벤토리의 재료를 확인하고 소모하여 월드에 바리케이드와 포탑을 배치합니다.
+**[코드 스니펫: 건설 자원 소모 로직 (BuildSystem.cpp)]**
+```cpp
+// Barricade: scrap_metal 2 + plank 2
+if (type == BuildingType::Barricade) {
+    hasMaterials = requireItem("scrap_metal", 2) && requireItem("plank", 2);
+    if (hasMaterials) {
+        consumeItem("scrap_metal", 2);
+        consumeItem("plank", 2);
+    }
+}
+// 자원 검증 통과 후 Entity 생성 및 맵에 점유(Occupied) 처리
+if (hasMaterials) {
+    Entity e = world.createEntity();
+    auto& bld = world.addComponent<BuildingComponent>(e);
+    bld.type = type;
+    map.setOccupied(tileX, tileY, e.id, true);
+}
+```
+> **구현 설명**: 클라이언트에서 건설 요청이 오면 람다 함수 `requireItem`과 `consumeItem`을 통해 서버 인벤토리 컴포넌트의 실제 슬롯을 검증합니다. 재료가 충족되면 새로운 건물 엔티티를 생성하고 타일맵에 점유 처리를 하여 다른 오브젝트와 겹치지 않게 만듭니다.
+
+#### Turret AI (자동 포탑 조준 및 사격 호(Arc) 검사)
+건설한 포탑은 독립적인 AI로 동작하며, 설정된 방향과 사격 호(Arc) 범위 내에서 가장 가까운 적을 자동으로 탐색하여 사격합니다.
+**[코드 스니펫: 포탑 자동 조준 및 내적(Dot Product) 기반 사격 호 판정 (BuildSystem.cpp)]**
+```cpp
+void BuildSystem::updateTurrets(World& world, float dt) {
+    for (size_t i = 0; i < bldPool.owners().size(); ++i) {
+        auto& bld = bldPool.data()[i];
+        if (bld.isDestroyed || bld.type != BuildingType::Turret) continue;
+
+        bld.turretCooldown -= dt;
+        if (bld.turretCooldown > 0.0f) continue;
+
+        // ── 사거리(turretRange) 내 가장 가까운 적 탐색 ──
+        float nearDist = bld.turretRange;
+        Entity target{NULL_ENTITY};
+        for (EntityID id : world.alive()) {
+            // 같은 팀이면 공격하지 않음 (아군 판별)
+            if (static_cast<uint8_t>(targetTeam) == bld.ownerTeam) continue;
+            float dx = txf->x - xf->x, dy = txf->y - xf->y;
+            float d  = std::sqrt(dx*dx + dy*dy);
+            if (d > nearDist) continue;
+
+            // ── 사격 호(Arc) 범위 제한: 내적(Dot Product)으로 각도 검사 ──
+            if (bld.turretArcDeg < 355.0f) {
+                float angleRad = bld.turretAngle * (PI / 180.0f);
+                float dirX =  std::sin(angleRad);
+                float dirY = -std::cos(angleRad);
+                float dot  = (dx * dirX + dy * dirY) / d; // 포탑 전방과 적 방향의 내적
+                float halfArc = bld.turretArcDeg * 0.5f * (PI / 180.0f);
+                if (std::acos(dot) > halfArc) continue; // 사격 호 밖이면 무시
+            }
+            nearDist = d; target = e;
+        }
+        if (!target.isValid()) continue;
+        thp->applyDamage(bld.turretDamage, DamageType::Bullet);
+        bld.turretCooldown = 1.0f / bld.turretFireRate;
+    }
+}
+```
+> **구현 설명**: 포탑은 매 틱마다 모든 생존 엔티티를 순회하며 사거리(`turretRange`) 안에 들어온 가장 가까운 적을 탐색합니다. 이때 핵심은 **내적(Dot Product)** 연산입니다. 포탑이 바라보는 전방 벡터(`dirX, dirY`)와 적까지의 방향 벡터 사이의 내적을 구한 뒤, `acos()`으로 사잇각을 계산하여 포탑의 사격 호(`turretArcDeg`)의 절반보다 작은지 비교합니다. 이를 통해 포탑을 360도 자유회전이 아닌, 특정 방향으로만 사격하는 현실적인 방어 시설로 만들었습니다. 아군(같은 팀)은 공격 대상에서 자동으로 제외됩니다.
+
+#### Extraction System (탈출 시스템)
+게임 시간 5분 후 탈출존이 열리며 5초 채널링 시 탈출에 성공합니다.
+**[코드 스니펫: 탈출 채널링 처리 (ExtractionSystem.cpp)]**
+```cpp
+// 탈출 구역 내에 있고 채널링 중일 때
+if (st.channeling) {
+    st.channelTimer += dt;
+    
+    // 이동하거나 데미지를 입으면 채널링 취소
+    float moveDist = std::sqrt(std::pow(xf->x - st.lastX, 2.0f) + std::pow(xf->y - st.lastY, 2.0f));
+    if (moveDist > 4.0f || hp->currentHp < st.lastHp - 0.5f) {
+        st.channeling = false;
+        st.channelTimer = 0.0f;
+    }
+
+    if (st.channelTimer >= EXTRACTION_CHANNEL_TIME) {
+        st.channeling = false;
+        if (m_onExtracted) m_onExtracted(e, static_cast<uint8_t>(zone)); // 탈출 성공
+    }
+}
+```
+> **구현 설명**: 탈출존 내에서 F키를 눌러 채널링을 시작하면 `channelTimer`가 증가합니다. 이때 플레이어가 이동(4px 이상)하거나 대미지를 입으면 타이머가 초기화되어 긴장감을 유도하며, 5초(`EXTRACTION_CHANNEL_TIME`)를 채우면 성공 이벤트를 발생시킵니다.
+
+#### Alliance System (연합 및 배신)
+타 팀과 핸드셰이크 방식으로 연합을 맺거나 공격하여 배신할 수 있습니다.
+**[코드 스니펫: 연합 제안 및 핸드셰이크 (AllianceSystem.cpp)]**
+```cpp
+bool AllianceSystem::proposeAlliance(uint8_t a, uint8_t b) {
+    m_proposed[a][b] = 1;
+    // B팀도 A팀에게 연합을 제안했다면(핸드셰이크 성립)
+    if (m_proposed[b][a]) {
+        setAlliance(a, b, true);
+        m_proposed[a][b] = 0;
+        m_proposed[b][a] = 0;
+        broadcast(a, b, true);
+        return true;
+    }
+    return false;
+}
+```
+> **구현 설명**: A팀이 B팀에게 연합을 제안할 경우 `m_proposed` 배열에 상태를 기록합니다. B팀 역시 A팀에게 제안한 기록이 있다면 즉시 연합 상태(`setAlliance`)로 변경되고 양측 클라이언트에 브로드캐스트하여 동맹 여부를 HUD에 반영합니다.
+
+#### Database (MySQL 영구 저장)
+플레이어의 계정 정보, 인벤토리, 스태시, 통계 정보를 MySQL 서버에 안전하게 저장합니다.
+**[코드 스니펫: 트랜잭션 기반 인벤토리 DB 저장 (Database.cpp)]**
+```cpp
+void Database::saveAccount(const std::string& username, const InventoryComponent& inv) {
+    // 1. 트랜잭션(Transaction) 시작 - 중간에 실패하면 자동 롤백
+    struct Transaction {
+        MYSQL* conn; bool committed = false;
+        Transaction(MYSQL* c) : conn(c) { mysql_query(conn, "START TRANSACTION"); }
+        ~Transaction() { if (!committed) mysql_query(conn, "ROLLBACK"); }
+        void commit() { mysql_query(conn, "COMMIT"); committed = true; }
+    };
+    Transaction txn(m_conn);
+
+    // 2. 계정 소지금 업데이트
+    std::snprintf(buf, sizeof(buf), "UPDATE accounts SET money=%d WHERE username='%s'", inv.money, escUser.data());
+    query(std::string(buf));
+
+    // 3. 기존 인벤토리 기록 일괄 삭제 (Wipe) 후 새로 Insert
+    query("DELETE FROM inventory WHERE username='" + escUser.data() + "'");
+    
+    // 4. 아이템 하나당 INSERT (SQL Injection 방지를 위해 Escape)
+    for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
+        const Item& item = inv.slots[i];
+        if (!item.isValid()) continue;
+        mysql_real_escape_string(m_conn, escKey.data(), item.key.c_str(), item.key.size());
+        std::snprintf(buf, sizeof(buf),
+            "INSERT INTO inventory (username, slot_index, is_equipped, item_id, item_key) "
+            "VALUES ('%s', %d, 0, %d, '%s')", escUser.data(), i, item.itemID, escKey.data());
+        query(std::string(buf));
+    }
+    txn.commit(); // 모든 쿼리가 정상 실행되면 DB에 반영
+}
+```
+> **구현 설명**: 유저가 게임을 종료하거나 탈출에 성공할 때 인벤토리를 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 서버가 다운되거나 에러가 발생하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 인벤토리 손실을 원천적으로 방지합니다.
+
+### 4.4 플레이어 이동 처리 및 넉백 물리 (MovementSystem)
+클라이언트로부터 받은 입력 패킷을 서버에서 물리적으로 시뮬레이션하는 핵심 시스템입니다.
+
+**[코드 스니펫: 서버 측 이동 시뮬레이션 및 넉백 감쇠 (MovementSystem.cpp)]**
+```cpp
+void MovementSystem::applyInput(World& world, const TileMap& map,
+                                 uint32_t ownerID, const InputPacket& input, float dt) {
+    // ── 이동 속도 결정: 달리기, 걷기, 웅크리기에 따라 분기 ──
+    float speed = SPEED_WALK;
+    bool sprinting = (input.actions & ACT_SPRINT) && !(input.actions & ACT_CROUCH);
+    bool crouching = (input.actions & ACT_CROUCH) != 0;
+    if (sprinting) speed = SPEED_SPRINT;
+    if (crouching) speed = SPEED_CROUCH;
+
+    // ── 이동 벡터 정규화 (대각선 이동 시 속도 1.41배 방지) ──
+    float mx = input.moveX, my = input.moveY;
+    float len = std::sqrt(mx * mx + my * my);
+    if (len > 0.01f) { mx /= len; my /= len; }
+
+    // ── 축 분리 이동: X 이동→X 충돌 해결, Y 이동→Y 충돌 해결 ──
+    xf->x += mx * speed * dt;
+    map.resolveAxisX(xf->x, xf->y, ENTITY_HW, ENTITY_HH);
+    xf->y += my * speed * dt;
+    map.resolveAxisY(xf->x, xf->y, ENTITY_HW, ENTITY_HH);
+}
+
+// ── 넉백 물리: 근접 공격 피격 시 밀려남 + 지수 감쇠 ──
+if (cbt.knockTimer > 0.0f) {
+    xf->x += cbt.knockVx * dt;
+    xf->y += cbt.knockVy * dt;
+    cbt.knockTimer -= dt;
+    cbt.knockVx *= (1.0f - 10.0f * dt); // 매 프레임 속도를 지수적으로 감쇠
+    cbt.knockVy *= (1.0f - 10.0f * dt);
+    map.resolveAABB(xf->x, xf->y, ENTITY_HW, ENTITY_HH); // 넉백 중에도 벽 충돌 해결
+}
+```
+> **구현 설명**: 서버가 클라이언트의 입력 패킷(`PktC2SInput`)을 수신하면 `applyInput()`을 호출하여 서버 측에서 이동을 시뮬레이션합니다. 대각선 이동 시 속도가 √2배(약 1.41배)로 뛰는 것을 방지하기 위해 이동 벡터를 정규화(Normalize)합니다. 축 분리 이동은 물리 충돌(4.5절)의 resolveAxis 함수와 연동하여 벽에 자연스럽게 미끄러지도록 처리합니다. 근접 공격에 피격당했을 때는 공격 방향으로 넉백(Knockback) 속도가 부여되며, `(1.0f - 10.0f * dt)` 계수를 곱해 매 프레임 지수적으로 감쇠시켜 밀려나다가 서서히 멈추는 자연스러운 물리 연출을 구현했습니다.
+
+### 4.5 물리 엔진 및 충돌 처리 (Custom Collision)
+상용 물리 엔진(Box2D 등)을 사용하지 않고, 타일 기반의 **AABB(Axis-Aligned Bounding Box)** 충돌 처리를 직접 구현하여 서버의 연산 부하를 최소화했습니다.
+
+**[코드 스니펫: AABB 기반 충돌 슬라이딩 및 축 분리 처리 (TileMap.cpp)]**
+```cpp
+void TileMap::resolveAxisX(float& wx, float wy, float hw, float hh) const {
+    constexpr float EPS = 0.001f;
+    int x0 = worldToTile(wx - hw);
+    int x1 = worldToTile(wx + hw - EPS);
+    int y0 = worldToTile(wy - hh + EPS);   // 모서리 겹침 방지용 오차(EPS)
+    int y1 = worldToTile(wy + hh - EPS);   
+    
+    // 플레이어의 AABB가 걸쳐 있는 맵 타일 범위를 순회하며 충돌 검사
+    for (int ty = y0; ty <= y1; ++ty) {
+        for (int tx = x0; tx <= x1; ++tx) {
+            if (!isSolid(tx, ty)) continue; // 통과 불가능한 벽(Solid)인지 확인
+            
+            float tL = tileToWorld(tx), tR = tL + TILE_SIZE;
+            float ol  = (wx + hw) - tL; // 오른쪽 방향 겹침량
+            float or_ = tR - (wx - hw); // 왼쪽 방향 겹침량
+            
+            if (ol <= 0.0f || or_ <= 0.0f) continue;
+            
+            // 더 적게 겹친 방향(최단 거리)으로 좌표를 밀어내어 충돌 해결
+            if (ol < or_) wx -= ol; 
+            else          wx += or_;
+        }
+    }
+}
+```
+> **구현 설명**: 플레이어나 엔티티가 벽과 충돌할 때 멈춰버리는(Snagging) 현상을 막고 자연스럽게 벽을 타고 미끄러지듯(Sliding) 이동하게 만들기 위해, X축(`resolveAxisX`)과 Y축(`resolveAxisY`)의 충돌 계산을 완전히 분리하여 순차적으로 수행합니다. 또한 소수점 연산의 미세한 오차로 인해 평평한 벽의 타일 이음새에 걸리는 현상을 해결하고자 `EPS(0.001f)` 상수를 둔 Half-open interval 기법을 적용하여 물리 연산의 안정성을 높였습니다.
+
+**[코드 스니펫: 근접 공격 회전 행렬(OBB) 충돌 검사 (CombatSystem.cpp)]**
+```cpp
+bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
+    // 1. 공격자의 방향(Rotation)을 라디안으로 변환하여 전방 벡터(fwdX, fwdY) 계산
+    float rad = axf->rotation * (3.14159265f / 180.0f);
+    float fwdX =  std::sin(rad), fwdY = -std::cos(rad);
+
+    // 2. 공격자의 전방에 타격 박스(Hitbox)의 중심점(hitCX, hitCY) 생성
+    float hitCX = axf->x + fwdX * (acbt->melee.range * 0.5f);
+    float hitCY = axf->y + fwdY * (acbt->melee.range * 0.5f);
+    float hw = acbt->melee.arcWidth * 0.5f, hh = acbt->melee.range * 0.5f;
+
+    for (EntityID vid : world.alive()) {
+        // 3. 대상의 위치를 타격 박스 중심점 기준 상대 좌표(vx, vy)로 변환
+        float vx = vxf->x - hitCX;
+        float vy = vxf->y - hitCY;
+        
+        // 4. 2D 회전 변환 행렬(Rotation Matrix)을 역으로 적용하여 Local Space로 변환
+        float cosA = std::cos(-rad), sinA = std::sin(-rad);
+        float localX = vx * cosA - vy * sinA;
+        float localY = vx * sinA + vy * cosA;
+
+        // 5. 회전이 풀린 직교 좌표계(AABB) 상태에서 폭(hw)과 높이(hh) 내부에 들어오는지 판별
+        if (std::abs(localX) > hw || std::abs(localY) > hh) continue;
+
+        // 판정을 통과하면 피격 처리 (데미지 적용, 넉백 등)
+        applyDamage(world, victim, attacker, acbt->melee.damage, DamageType::Melee);
+    }
+}
+```
+> **구현 설명**: 근접 무기를 휘두를 때 직사각형 모양의 타격 범위가 플레이어의 바라보는 각도에 맞춰 비스듬하게 회전합니다. 상용 물리 엔진의 OBB(Oriented Bounding Box) 연산을 자체적으로 구현하기 위해, **2D 회전 변환 행렬(Rotation Matrix)**을 사용했습니다. 적의 좌표를 타격 박스의 중심점을 원점으로 하는 로컬 좌표계로 역회전(-rad)시켜 가져온 뒤, 단순한 AABB(축 정렬 bounding box) 충돌로 치환하여 매우 가볍고 정확하게 피격 판정을 수행합니다. (총기 사격에 사용된 Raycast 물리 연산은 앞선 4.3절에 포함되어 있습니다.)
+
+---
+
+## 5. 클라이언트 구현
+
+### 5.1 렌더링 및 카메라 처리
+- **Y-Sort 렌더링**: 2D 탑다운 시점에서 입체감을 주기 위해 엔티티들의 Y 좌표를 기준으로 렌더링 순서를 정렬합니다.
+- **카메라 (Camera)**: 플레이어의 움직임에 따라 카메라가 부드럽게 추적하며, 마우스 커서 위치에 따라 조준점 쪽으로 화면을 약간 이동시킵니다.
+- **실내 투명화 및 시야 차단**: 플레이어가 건물 내부에 들어가면 지붕을 반투명하게 렌더링하고, 건물 밖의 적들은 볼 수 없게 만듭니다.
+- **시야각 (FOV) 및 Fog of War**: 마우스 커서 방향을 기준으로 120도 시야만 제공하며, 밤낮 시간에 따라 시야 반경이 축소됩니다.
+
+**[코드 스니펫: 건물 진입 시 지붕 투명화 처리 (Renderer.cpp)]**
+```cpp
+// 매 프레임마다 플레이어의 좌표(localX, localY)가 건물 영역 내부에 있는지 판별
+bool isInside = (localX >= bxWorld && localX <= bxWorld + bwWorld &&
+                 localY >= byWorld && localY <= byWorld + bhWorld);
+
+// 내부에 있을 때는 지붕의 알파(투명도) 값을 42로 낮춰 건물 내부를 보이게 함
+if (isInside) {
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 42); // 반투명
+    SDL_Rect roofTint = {sx1, sy1, pw, ph};
+    SDL_RenderFillRect(m_renderer, &roofTint);
+} else {
+    // 외부에 있을 때는 지붕을 불투명(255) 타일 텍스처로 덮어 내부를 가림
+    SDL_SetRenderDrawColor(m_renderer, roofCol.r, roofCol.g, roofCol.b, 255);
+    SDL_RenderFillRect(m_renderer, &roofRect);
+}
+```
+> **구현 설명**: 플레이어가 맵에 배치된 특정 구역(District)이나 건물 영역에 진입했을 때 `isInside` 플래그가 활성화됩니다. 외부에 있을 때는 지붕 텍스처를 불투명(Alpha=255)하게 렌더링하여 건물 내부의 적이나 전리품을 숨기고, 내부에 진입하는 순간 지붕을 반투명(Alpha=42)하게 전환하여 실내 교전이 가능하도록 시야를 자연스럽게 조절했습니다.
+
+**[코드 스니펫: 120도 FOV 및 전장의 안개 구현 (Renderer.cpp)]**
+```cpp
+void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam, float gameTime) {
+    if (!m_fowTexture || darkness <= 0.01f) return;
+
+    // 1. 렌더 타깃을 FOW 텍스처로 전환 후 어두운 안개(알파값 적용)로 덮음
+    SDL_SetRenderTarget(m_renderer, m_fowTexture);
+    SDL_SetRenderDrawColor(m_renderer, r, g, b, fogAlpha);
+    SDL_RenderClear(m_renderer);
+
+    // 2. SDL_RenderGeometry를 사용하여 시야 부채꼴 내부를 완전 투명하게 뚫어줌 (alpha=0)
+    for (int i = 0; i < CONE_SEGS; ++i) {
+        float a0 = coneStart + i * coneStep;
+        float a1 = coneStart + (i + 1) * coneStep;
+        tri[1].position = {px + std::sin(a0) * R, py - std::cos(a0) * R};
+        tri[2].position = {px + std::sin(a1) * R, py - std::cos(a1) * R};
+        SDL_RenderGeometry(m_renderer, nullptr, tri, 3, nullptr, 0);
+    }
+
+    // 3. 양쪽 경계 그라데이션 적용 후 렌더 타깃 복원 및 화면에 텍스처 합성
+    drawGradEdge(coneStart, -1.0f);
+    drawGradEdge(coneEnd, 1.0f);
+    SDL_SetRenderTarget(m_renderer, nullptr);
+    SDL_RenderCopy(m_renderer, m_fowTexture, nullptr, nullptr);
+}
+```
+> **구현 설명**: SDL2의 기본 기능만으로는 복잡한 마스킹이 불가능하여, 렌더 타깃(Render Target) 텍스처를 활용했습니다. 안개 텍스처를 먼저 어둡게 칠한 다음, `SDL_RenderGeometry`로 플레이어의 조준 방향(120도)을 투명한 색(`alpha=0`)으로 뚫고, 외곽선에는 그라데이션을 적용하여 부드러운 시야 경계를 만들었습니다. 실내 진입 시 지붕이 투명화되는 로직을 구현했습니다.
+- **파티클 시스템**: 총구 화염(Muzzle Flash), 탄피 배출, 피격 시 혈흔, 회복 이펙트 등 다양한 파티클 효과로 타격감을 살렸습니다.
+- **화면 연출**: 피격 시 히트 플래시(화면 붉어짐) 및 카메라 쉐이크를 적용했습니다.
+
+### 5.3 UI / UX
+- **인벤토리**: 마우스 드래그 앤 드롭 방식을 지원하여 직관적인 아이템 장착 및 슬롯 이동, 수량 분할 버리기가 가능합니다.
+- **제작 UI**: 건설 모드 진입 시 포탑/바리케이드/제작대 등 조합에 필요한 재료 리스트를 직관적으로 표시합니다.
+
+> **[그림 7]** 게임 플레이 인게임 스크린샷 (HUD 포함)
+> *(여기에 인게임 스크린샷을 삽입해주세요)*
+
+> **[그림 8]** 인벤토리 및 UI 스크린샷
+> *(여기에 인벤토리 창이 열려있는 UI 스크린샷을 삽입해주세요)*
+
+---
+
+## 6장. 결과 및 소감
+
+### 6.1 실행 환경
+- **OS 및 개발 환경**: macOS, C++17
+- **주요 라이브러리**: CMake, SDL2 (image, mixer, ttf), ENet, cJSON, MySQL (Connector)
+- **빌드 방식**: CMake 빌드 도구를 활용 (`cmake --build build`)
+
+### 6.2 구현 완료 주요 기능
+- ECS 기반 자체 서버 구조 구축 및 서버 권한 멀티플레이 연동 완료
+- 상태 기반 좀비 AI (시야 검사, 소음 반응, 장애물 우회) 구현
+- 동적 상호작용 시스템 (화염 전파, 건물/문 파괴, 포탑 건설, 탈출존 오픈)
+- 인벤토리 기반 파밍 및 데이터베이스 연동 영속화 처리
+
+### 6.3 미완성 사항 및 한계점
+- 좀비 개체 수가 맵 전역에 다수 스폰될 시, 충돌 처리나 탐색에서 전체 엔티티 순회가 발생하여 O(N²) 성능 병목 우려가 존재합니다. 향후 QuadTree 등 공간 분할 최적화가 요구됩니다.
+- DB 연결 오류 시 임시 오프라인 모드로의 우회 로직이 일부 제약이 있어, 서버 안정화 측면에서 추가 작업이 필요합니다.
+
+### 6.4 배운 점 및 소감
+- **팀원 A**: C++ 코어 레벨에서 ECS를 직접 설계하고 클라이언트 예측-롤백 모델을 구현하면서, 메모리 연속성과 서버-클라이언트 상태 동기화 문제의 높은 복잡도를 깊이 이해하게 되었습니다.
+- **팀원 B**: SDL2를 이용한 저수준 렌더링 제어와 파티클/사운드 시스템을 붙이면서 게임 클라이언트 구조의 전반을 파악할 수 있었으며, 특히 문서화와 협업 스케줄 관리의 중요성을 몸소 체감했습니다.
