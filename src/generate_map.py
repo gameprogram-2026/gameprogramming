@@ -244,7 +244,7 @@ def find_spawn(cx, cy):
                     return tx, ty
     return cx, cy
 
-spawn_corners = [(10, 10), (185, 10), (10, 185), (185, 185)]
+spawn_corners = [(25, 25), (150, 25), (25, 170), (165, 170)]
 player_spawns = [{"team": i+1, "x": x, "y": y}
                  for i, (x, y) in enumerate(find_spawn(*c) for c in spawn_corners)]
 
