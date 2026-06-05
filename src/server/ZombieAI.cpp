@@ -50,20 +50,35 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         const auto& doors = m_map->getDoors();
         const uint16_t doorID = static_cast<uint16_t>(ai.targetDoorID);
         if (doorID < doors.size() && !doors[doorID].open && !doors[doorID].broken) {
-            ai.targetX = TileMap::tileCentre(doors[doorID].tx);
-            ai.targetY = TileMap::tileCentre(doors[doorID].ty);
-            doorTargetActive = true;
+            float doorX = TileMap::tileCentre(doors[doorID].tx);
+            float doorY = TileMap::tileCentre(doors[doorID].ty);
+            float ddx = doorX - xf->x, ddy = doorY - xf->y;
+            float doorDist2 = ddx*ddx + ddy*ddy;
+
+            // 플레이어가 문보다 더 가까우면 문 타겟 해제 (플레이어 우선)
+            Entity nearest = findNearestEnemy(world, zombie);
+            bool playerCloser = false;
+            if (nearest.isValid()) {
+                auto* nxf = world.tryGet<TransformComponent>(nearest);
+                if (nxf) {
+                    float pdx = nxf->x - xf->x, pdy = nxf->y - xf->y;
+                    if (pdx*pdx + pdy*pdy < doorDist2) playerCloser = true;
+                }
+            }
+
+            if (!playerCloser) {
+                ai.targetX = doorX;
+                ai.targetY = doorY;
+                doorTargetActive = true;
+            }
         } else {
             ai.targetDoorID = -1;
         }
     }
 
-    // 낮/밤에 따른 청각 반경 조절 (밤에는 엄청 예민해짐)
-    float hearingMult = isNight ? 2.5f : 0.3f;
-
     // Sample loudest noise within hearing range and keep its position. State changes
     // from noise must have a real destination; otherwise zombies can chase (0,0).
-    const float hearingRadius = ZOMBIE_HEARING_RADIUS * hearingMult;
+    // Detection: zombie hears the sound if it's within the noise event's own radius.
     uint8_t maxNoise = 0;
     float noiseTargetX = xf->x;
     float noiseTargetY = xf->y;
@@ -71,7 +86,7 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         const float dx = ev.x - xf->x;
         const float dy = ev.y - xf->y;
         const float dist = std::sqrt(dx * dx + dy * dy);
-        if (dist > ev.radius + hearingRadius) continue;
+        if (dist > ev.radius) continue;
         if (ev.category > maxNoise) {
             maxNoise = ev.category;
             noiseTargetX = ev.x;
@@ -189,8 +204,20 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         if (doorTargetActive) {
             ai.stateTimer = 0.0f;
         } else {
-            // 매 틱 가장 가까운 적 재탐색 (타깃 사망 처리)
-            Entity target = findNearestEnemy(world, zombie);
+            Entity target{NULL_ENTITY};
+            if (ai.targetNetID != 0) {
+                for (EntityID id : world.alive()) {
+                    Entity e{id};
+                    auto* net = world.tryGet<NetworkComponent>(e);
+                    auto* hp = world.tryGet<HealthComponent>(e);
+                    if (net && hp && hp->isAlive && net->netID == ai.targetNetID) {
+                        target = e;
+                        break;
+                    }
+                }
+            }
+            // 매 틱 가장 가까운 적 재탐색 (기존 타겟이 죽었을 때만 변경)
+            if (!target.isValid()) target = findNearestEnemy(world, zombie);
             if (target.isValid()) {
                 auto* txf  = world.tryGet<TransformComponent>(target);
                 auto* tnet = world.tryGet<NetworkComponent>(target);
@@ -250,9 +277,9 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         if (nearest.isValid()) {
             auto* nxf = world.tryGet<TransformComponent>(nearest);
             if (nxf) {
-                // 거리가 멀어도 감지 (반경 1500픽셀 내의 플레이어 무조건 타겟팅)
+                // 밤: 700픽셀(22타일) 내 플레이어 무조건 타겟팅
                 float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
-                if (dx*dx + dy*dy < 1500.0f * 1500.0f) {
+                if (dx*dx + dy*dy < 700.0f * 700.0f) {
                     ai.targetX = nxf->x;
                     ai.targetY = nxf->y;
                     ai.state = ZombieState::Frenzy;
@@ -564,7 +591,7 @@ Entity ZombieAISystem::findNearestEnemy(World& world, Entity zombie) {
 
         float dx = xf->x - zxf->x, dy = xf->y - zxf->y;
         float d  = std::sqrt(dx*dx + dy*dy);
-        if (d < nearDist && d < 600.0f) {
+        if (d < nearDist && d < 960.0f) {
             bool hitWall = false;
             if (m_map) {
                 int steps = static_cast<int>(d / 16.0f); // Check every 16 pixels (half tile)

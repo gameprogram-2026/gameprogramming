@@ -21,17 +21,18 @@
 ## 2장. 게임 기획 개요
 
 ### 2.1 맵 구성
-- **City Ruins (200×200 타일)**: 거대한 폐허 도시를 배경으로 하며, 크게 3개의 구역(군사,주거 구역, 쇼핑몰, 산업 구역)으로 나뉘어 각기 다른 파밍 경험과 위험도를 제공합니다.
+- **City Ruins (200×200 타일)**: 거대한 폐허 도시를 배경으로 하며, 주거(NW), 상업(NE), 군사(SW), 공업(SE) 4개 구역으로 나뉘어 각기 다른 파밍 경험과 위험도를 제공합니다.
+- **건물 및 루트 배치**: 현재 생성 맵 기준 39개 건물이 배치되며, 서버는 라운드 시작 시 실내 55개, 실외 40개로 총 95개의 루트박스를 분산 스폰합니다.
 - **스폰 시스템**: 4개의 팀이 맵의 4코너에 분산되어 스폰하며, 초반 생존과 파밍을 위해 각자의 거점을 확보해야 합니다.
 
 > **[그림 1]** 맵 전체 구역 다이어그램
-> *(여기에 맵 다이어그램 스크린샷을 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 맵 다이어그램 스크린샷 삽입)*
 
 ### 2.2 핵심 메카닉
 1. **노이즈 시스템**: 총격, 발소리, 건설 등 플레이어의 행동마다 고유의 소음 반경(noiseRadius)이 발생하여, 주변 좀비들의 어그로를 끌게 됩니다.
 2. **연합 및 배신 시스템**: 타 팀과 핸드셰이크를 통해 임시 연합을 맺을 수 있으나, 언제든 아군 오인 사격(Friendly-fire)을 통해 배신할 수 있는 긴장감을 부여합니다.
 3. **건설 시스템**: 수집한 재료(고철, 판자, 전자 부품 등)를 활용하여 바리케이드와 포탑을 설치해 방어선을 구축할 수 있습니다.
-4. **탈출 시스템**: 게임 시작 5분(300초) 후 맵에 무작위(또는 지정된) 탈출존이 활성화되며, 해당 구역에서 5초간 채널링(F키)을 유지하면 탈출에 성공합니다.
+4. **탈출 시스템**: 게임 시작 5분(300초) 후 `map.json`에 지정된 4개의 탈출존이 활성화되며, 해당 구역에서 5초간 채널링(F키)을 유지하면 탈출에 성공합니다.
 5. **자동 포탑 시스템**: 건설한 포탑이 설정된 사격 호(Arc) 범위 내에서 가장 가까운 적을 자동으로 조준하여 사격합니다.
 
 ### 2.3 아이템 및 무기 체계
@@ -39,17 +40,17 @@
 - **루트박스**: 실내외에 배치된 파밍 상자에서 탄약, 회복약(Medkit, Bandage), 재료, 총기류를 획득할 수 있습니다.
 
 > **[그림 2]** 아이템 및 무기 등급 체계 표
-> *(여기에 아이템 기획안 등급 표 이미지를 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 아이템 기획안 등급 표 삽입)*
 
 ---
 
 ## 3장. 기술 아키텍처
 
 ### 3.1 전체 구조
-클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버는 상태를 관리하고 MySQL 데이터베이스에 영속적 데이터를 저장합니다.
+클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버가 게임 상태를 권한 있게 관리합니다. MySQL 데이터베이스가 설정된 환경에서는 계정, 인벤토리, 스태시를 영속 저장하고, DB 연결이 없으면 기본적으로 로그인을 차단합니다. 로컬 테스트가 필요한 경우에만 `DEADZONE_OFFLINE_AUTH=1`로 계정 검증 우회를 명시적으로 허용할 수 있습니다.
 
 > **[그림 3]** Client ↔ ENet UDP ↔ Server ↔ MySQL 통신 흐름도
-> *(여기에 통신 흐름도 이미지를 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 통신 흐름도 삽입)*
 
 ### 3.2 자체 구현 ECS (Entity Component System)
 - `World` 클래스를 중심으로 동작하며, `ComponentPool<T>`를 통해 메모리 연속성을 보장해 캐시 히트율을 높였습니다.
@@ -76,48 +77,53 @@ private:
 > **구현 설명**: `ComponentPool`은 `std::vector`를 기반으로 한 연속된 메모리 공간에 컴포넌트를 할당합니다. `m_index`를 통해 Entity ID로 빠른 접근이 가능하며, 컴포넌트 추가/삭제 시 벡터의 끝 요소를 빈 공간으로 스왑(Swap-and-Pop)하여 O(1) 복잡도와 캐시 히트율(Cache Hit Ratio)을 극대화했습니다.
 
 > **[그림 4]** ECS World/ComponentPool 구조도
-> *(여기에 ECS 구조도 다이어그램을 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 ECS 구조도 다이어그램 삽입)*
 
 ### 3.3 네트워크 권한 모델
 - **서버 권한 (Server Authority)**: 모든 중요한 로직과 상태 판정은 서버에서 수행하여 클라이언트 변조(핵)를 방지합니다.
 - **클라이언트 사이드 예측 및 서버 롤백**: 클라이언트의 조작에 즉각적으로 반응하여 지연 시간(Lag)을 숨기고, 서버의 결과가 다를 경우 롤백(Rollback)하여 보정합니다.
 - **채널 분리**: ENet의 `CHAN_RELIABLE`과 `CHAN_UNRELIABLE`을 분리해 중요한 이벤트와 잦은 상태 업데이트(좌표 등)의 트래픽을 효율적으로 관리했습니다.
 
-**[코드 스니펫: 서버-클라이언트 패킷 프로토콜 구조 (Protocol.h)]**
+**[코드 스니펫: 서버-클라이언트 패킷 프로토콜 구조 (Packet.h / Protocol.h)]**
 ```cpp
-// 1바이트 크기의 패킷 헤더 (모든 메시지의 선두에 위치)
-struct PktHeader {
-    PacketType type;
-    uint32_t   tick;       // 서버 동기화용 틱(Tick) 번호
+// 클라이언트 -> 서버 (CHAN_UNRELIABLE, 약 60Hz 입력 전송)
+#pragma pack(push, 1)
+struct InputPacket {
+    uint8_t  packetType = static_cast<uint8_t>(PacketType::C2S_Input);
+    uint32_t seqNum     = 0;     // 클라이언트 예측 보정용 시퀀스 번호
+    float    moveX      = 0.0f;  // 정규화된 이동 벡터 [-1, 1]
+    float    moveY      = 0.0f;
+    float    aimAngle   = 0.0f;  // 마우스 조준 각도
+    uint16_t actions    = 0;     // ACT_SHOOT, ACT_SPRINT 등 비트마스크
+    uint16_t clientTick = 0;
+    float    clientDt   = 0.0f;
 };
+static_assert(sizeof(InputPacket) == 25, "InputPacket size mismatch");
+#pragma pack(pop)
 
-// 클라이언트 -> 서버 (CHAN_UNRELIABLE, 약 64Hz 전송)
-struct PktC2SInput {
-    PktHeader header;
-    uint32_t  seqNum;      // 클라이언트 사이드 예측(CSP) 보정용 시퀀스 번호
-    float     moveX, moveY;// 정규화된 이동 벡터 [-1, 1]
-    float     aimAngle;    // 마우스 조준 각도 (0~360도)
-    uint16_t  actionFlags; // 비트마스크 (ACT_SHOOT | ACT_SPRINT | ACT_RELOAD 등)
+// 서버 -> 클라이언트 (CHAN_UNRELIABLE, 20Hz 월드 스냅샷)
+#pragma pack(push, 1)
+struct EntityStateRecord {
+    uint8_t  version     = PROTOCOL_VERSION;
+    uint8_t  recordType  = REC_PLAYER;  // player, zombie, building, loot 등
+    uint16_t seqAck      = 0;           // 서버가 처리한 마지막 입력 seq
+    uint16_t entityID    = 0;
+    uint8_t  statusFlags = 0;
+    float    x           = 0.0f;
+    float    y           = 0.0f;
+    uint16_t checksum    = 0;           // Fletcher-16
 };
-
-// 서버 -> 클라이언트 (CHAN_UNRELIABLE, 약 20Hz 전송)
-struct PktEntityState {
-    uint32_t netID;
-    float    x, y;
-    float    rotation;
-    float    hp;
-    uint8_t  animFrame;
-    uint8_t  flags;        // 상태 플래그 (isAlive, isSprinting, isBleeding 등)
-};
+static_assert(sizeof(EntityStateRecord) == 17, "EntityStateRecord must be exactly 17 bytes");
+#pragma pack(pop)
 ```
-> **구현 설명**: 클라이언트와 서버가 주고받는 데이터는 결코 단순하지 않습니다. 대역폭을 최적화하기 위해 `#pragma pack(push, 1)`을 사용하여 구조체의 메모리 패딩(Padding)을 제거했습니다. 
-클라이언트는 1초에 64번씩 마우스 조준 각도(`aimAngle`), 이동 벡터(`moveX, Y`), 그리고 사격이나 달리기 같은 행동을 16비트의 `actionFlags` 비트마스크로 압축하여 서버로 보냅니다. 서버는 이를 바탕으로 물리 연산과 권한 검증을 마친 뒤, `PktEntityState` 구조체에 체력, 애니메이션 프레임, 상태 플래그 등을 촘촘하게 압축하여 클라이언트들에게 브로드캐스트합니다. 이 외에도 데미지 이벤트(`PktDamageEvent`), 인벤토리 전송(`PktStashTransfer`), 건축/동맹 요청 등 40여 가지의 패킷 타입(`PacketType`)을 정의하여 게임 내 모든 상호작용을 처리합니다.
+> **구현 설명**: 대역폭을 줄이기 위해 `#pragma pack(push, 1)`로 구조체 패딩을 제거했습니다. 클라이언트는 이동, 조준, 사격, 재장전, 상호작용 같은 입력을 `InputPacket` 하나로 압축해 전송하고, 서버는 이를 검증한 뒤 `EntityStateRecord` 배열 기반의 월드 스냅샷으로 좌표와 상태 플래그를 브로드캐스트합니다. 스냅샷 레코드는 17바이트로 고정되어 있으며, Fletcher-16 체크섬으로 손상된 레코드를 걸러냅니다. 이 외에도 데미지, 인벤토리, 건설, 문, 동맹, 탈출, 드랍 관련 패킷 타입을 분리하여 게임 내 상호작용을 처리합니다.
 
 **[코드 스니펫: 월드 스냅샷 최적화 브로드캐스팅 (NetworkSystem.cpp)]**
 ```cpp
 void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
-    // 1. SnapshotHeader 구조체와 가변 배열(EntityStateRecord) 버퍼 할당
-    static uint8_t buf[sizeof(SnapshotHeader) + 512 * sizeof(EntityStateRecord)];
+    // 1. SnapshotHeader 구조체와 EntityStateRecord 배열 버퍼 할당
+    static uint8_t buf[sizeof(SnapshotHeader) +
+                       MAX_SNAPSHOT_ENTITIES * sizeof(EntityStateRecord)];
     auto* header = reinterpret_cast<SnapshotHeader*>(buf);
     auto* records = reinterpret_cast<EntityStateRecord*>(buf + sizeof(SnapshotHeader));
 
@@ -133,14 +139,14 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
         }
     }
     
-    // 3. CHAN_UNRELIABLE(빠른 상태 전송)을 통해 접속 중인 모든 클라이언트에 브로드캐스트
+    // 3. CHAN_UNRELIABLE(빠른 상태 전송)을 통해 접속 중인 모든 클라이언트에 전송
     ENetPacket* peerPkt = enet_packet_create(buf, totalLen, 0);
     for (int i = 0; i < m_peerCount; ++i) {
         enet_peer_send(m_peers[i].peer, CHAN_UNRELIABLE, peerPkt);
     }
 }
 ```
-> **구현 설명**: 매 틱마다 서버 월드의 모든 객체를 보내면 대역폭 낭비가 매우 큽니다. 따라서 위치나 상태가 변경된(`Dirty`) 엔티티만 수집하여 가변 길이의 `EntityStateRecord` 배열로 직렬화합니다. `CHAN_UNRELIABLE` 채널을 이용해 패킷 유실을 감수하더라도 가장 최신의 좌표를 최단 시간 내에 브로드캐스트하도록 멀티플레이어 환경을 최적화했습니다.
+> **구현 설명**: 서버는 `NetworkComponent`를 가진 월드 엔티티를 스냅샷 레코드로 직렬화하고, 레코드 수가 `MAX_SNAPSHOT_ENTITIES`에 도달하면 패킷을 나누어 전송합니다. 각 클라이언트별로 자신의 엔티티 레코드에는 마지막으로 처리된 입력 시퀀스(`seqAck`)를 넣어 클라이언트 사이드 예측 보정에 사용합니다. `CHAN_UNRELIABLE` 채널을 이용해 좌표 업데이트는 최신성이 우선되도록 구성했습니다.
 
 **[코드 스니펫: 클라이언트 사이드 예측 및 롤백 (NetworkClient.cpp)]**
 ```cpp
@@ -269,7 +275,7 @@ void ZombieAISystem::doMovement(World& world, Entity zombie, ZombieAIComponent& 
 > **구현 설명**: 좀비가 플레이어를 향해 이동할 때, 단순히 직선으로 쫓아오는 것을 넘어 **무리 지어 이동(Flocking)** 할 때 서로 겹쳐서 하나의 점처럼 뭉치지 않게 만드는 분리(Separation) 로직을 적용했습니다. 벽체와 충돌할 때는 자연스럽게 미끄러지도록 X/Y축을 분리하여 위치를 보정(`resolveAxis`)합니다.
 
 > **[그림 5]** ZombieAI FSM 상태전이 다이어그램
-> *(여기에 FSM 다이어그램을 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 FSM 상태전이 다이어그램 삽입)*
 
 ### 4.2 FireSystem (화염 전파)
 - 화염병 투척 시 BFS(너비 우선 탐색) 알고리즘을 사용해 화염이 타일 단위로 번져나갑니다.
@@ -299,7 +305,7 @@ void FireSystem::spreadBFS(World& world, TileMap& map) {
 > **구현 설명**: 매 `FIRE_SPREAD_INTERVAL` 주기로 호출되며, 화염의 최전선(`m_frontier`)에서 상하좌우 인접 타일을 검사합니다. 가연성 타일(나무, 데브리)일 경우 `igniteTile`을 호출하여 불을 붙이고 `m_frontier`에 편입시킵니다. `checkBuildingContact`를 통해 건물이나 포탑에 닿으면 즉시 파괴되거나 폭발하도록 처리했습니다.
 
 > **[그림 6]** FireSystem BFS 화염 전파 원리
-> *(여기에 BFS 화염 전파 원리 이미지를 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 BFS 화염 전파 원리 이미지 삽입)*
 
 ### 4.3 기타 주요 시스템
 
@@ -503,8 +509,8 @@ bool AllianceSystem::proposeAlliance(uint8_t a, uint8_t b) {
 ```
 > **구현 설명**: A팀이 B팀에게 연합을 제안할 경우 `m_proposed` 배열에 상태를 기록합니다. B팀 역시 A팀에게 제안한 기록이 있다면 즉시 연합 상태(`setAlliance`)로 변경되고 양측 클라이언트에 브로드캐스트하여 동맹 여부를 HUD에 반영합니다.
 
-#### Database (MySQL 영구 저장)
-플레이어의 계정 정보, 인벤토리, 스태시, 통계 정보를 MySQL 서버에 안전하게 저장합니다.
+#### Database (MySQL 영구 저장 및 인증)
+플레이어의 계정 정보, 인벤토리, 스태시를 MySQL 서버에 저장합니다. 서버는 DB 연결 실패 시 기본적으로 로그인과 회원가입을 차단하며, 로컬 테스트가 필요한 경우에만 `DEADZONE_OFFLINE_AUTH=1` 환경변수로 계정 검증 우회를 명시적으로 켤 수 있습니다.
 **[코드 스니펫: 트랜잭션 기반 인벤토리 DB 저장 (Database.cpp)]**
 ```cpp
 void Database::saveAccount(const std::string& username, const InventoryComponent& inv) {
@@ -537,7 +543,7 @@ void Database::saveAccount(const std::string& username, const InventoryComponent
     txn.commit(); // 모든 쿼리가 정상 실행되면 DB에 반영
 }
 ```
-> **구현 설명**: 유저가 게임을 종료하거나 탈출에 성공할 때 인벤토리를 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 서버가 다운되거나 에러가 발생하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 인벤토리 손실을 원천적으로 방지합니다.
+> **구현 설명**: 유저가 게임을 종료하거나 탈출에 성공할 때 인벤토리를 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 쿼리가 실패하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 인벤토리 손실을 방지합니다. DB 연결이 실패한 경우에는 인증 단계에서 접속을 차단하므로, 발표용 서버에서는 MySQL 접속 설정을 먼저 검증해야 합니다.
 
 ### 4.4 플레이어 이동 처리 및 넉백 물리 (MovementSystem)
 클라이언트로부터 받은 입력 패킷을 서버에서 물리적으로 시뮬레이션하는 핵심 시스템입니다.
@@ -575,7 +581,7 @@ if (cbt.knockTimer > 0.0f) {
     map.resolveAABB(xf->x, xf->y, ENTITY_HW, ENTITY_HH); // 넉백 중에도 벽 충돌 해결
 }
 ```
-> **구현 설명**: 서버가 클라이언트의 입력 패킷(`PktC2SInput`)을 수신하면 `applyInput()`을 호출하여 서버 측에서 이동을 시뮬레이션합니다. 대각선 이동 시 속도가 √2배(약 1.41배)로 뛰는 것을 방지하기 위해 이동 벡터를 정규화(Normalize)합니다. 축 분리 이동은 물리 충돌(4.5절)의 resolveAxis 함수와 연동하여 벽에 자연스럽게 미끄러지도록 처리합니다. 근접 공격에 피격당했을 때는 공격 방향으로 넉백(Knockback) 속도가 부여되며, `(1.0f - 10.0f * dt)` 계수를 곱해 매 프레임 지수적으로 감쇠시켜 밀려나다가 서서히 멈추는 자연스러운 물리 연출을 구현했습니다.
+> **구현 설명**: 서버가 클라이언트의 입력 패킷(`InputPacket`)을 수신하면 `MovementSystem::applyInput()`을 호출하여 서버 측에서 이동을 시뮬레이션합니다. 대각선 이동 시 속도가 √2배(약 1.41배)로 뛰는 것을 방지하기 위해 이동 벡터를 정규화(Normalize)합니다. 축 분리 이동은 물리 충돌(4.5절)의 resolveAxis 함수와 연동하여 벽에 자연스럽게 미끄러지도록 처리합니다. 근접 공격에 피격당했을 때는 공격 방향으로 넉백(Knockback) 속도가 부여되며, `(1.0f - 10.0f * dt)` 계수를 곱해 매 프레임 지수적으로 감쇠시켜 밀려나다가 서서히 멈추는 자연스러운 물리 연출을 구현했습니다.
 
 ### 4.5 물리 엔진 및 충돌 처리 (Custom Collision)
 상용 물리 엔진(Box2D 등)을 사용하지 않고, 타일 기반의 **AABB(Axis-Aligned Bounding Box)** 충돌 처리를 직접 구현하여 서버의 연산 부하를 최소화했습니다.
@@ -648,7 +654,7 @@ bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
 ### 5.1 렌더링 및 카메라 처리
 - **Y-Sort 렌더링**: 2D 탑다운 시점에서 입체감을 주기 위해 엔티티들의 Y 좌표를 기준으로 렌더링 순서를 정렬합니다.
 - **카메라 (Camera)**: 플레이어의 움직임에 따라 카메라가 부드럽게 추적하며, 마우스 커서 위치에 따라 조준점 쪽으로 화면을 약간 이동시킵니다.
-- **실내 투명화 및 시야 차단**: 플레이어가 건물 내부에 들어가면 지붕을 반투명하게 렌더링하고, 건물 밖의 적들은 볼 수 없게 만듭니다.
+- **실내 투명화 및 시야 처리**: 플레이어가 건물 내부에 들어가면 지붕을 반투명하게 렌더링하여 내부 구조와 아이템을 확인할 수 있게 만듭니다.
 - **시야각 (FOV) 및 Fog of War**: 마우스 커서 방향을 기준으로 120도 시야만 제공하며, 밤낮 시간에 따라 시야 반경이 축소됩니다.
 
 **[코드 스니펫: 건물 진입 시 지붕 투명화 처리 (Renderer.cpp)]**
@@ -697,7 +703,7 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
     SDL_RenderCopy(m_renderer, m_fowTexture, nullptr, nullptr);
 }
 ```
-> **구현 설명**: SDL2의 기본 기능만으로는 복잡한 마스킹이 불가능하여, 렌더 타깃(Render Target) 텍스처를 활용했습니다. 안개 텍스처를 먼저 어둡게 칠한 다음, `SDL_RenderGeometry`로 플레이어의 조준 방향(120도)을 투명한 색(`alpha=0`)으로 뚫고, 외곽선에는 그라데이션을 적용하여 부드러운 시야 경계를 만들었습니다. 실내 진입 시 지붕이 투명화되는 로직을 구현했습니다.
+> **구현 설명**: SDL2의 기본 기능만으로는 복잡한 마스킹이 불가능하여, 렌더 타깃(Render Target) 텍스처를 활용했습니다. 안개 텍스처를 먼저 어둡게 칠한 다음, `SDL_RenderGeometry`로 플레이어의 조준 방향(120도)을 투명한 색(`alpha=0`)으로 뚫고, 외곽선에는 그라데이션을 적용하여 부드러운 시야 경계를 만들었습니다.
 - **파티클 시스템**: 총구 화염(Muzzle Flash), 탄피 배출, 피격 시 혈흔, 회복 이펙트 등 다양한 파티클 효과로 타격감을 살렸습니다.
 - **화면 연출**: 피격 시 히트 플래시(화면 붉어짐) 및 카메라 쉐이크를 적용했습니다.
 
@@ -706,10 +712,10 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 - **제작 UI**: 건설 모드 진입 시 포탑/바리케이드/제작대 등 조합에 필요한 재료 리스트를 직관적으로 표시합니다.
 
 > **[그림 7]** 게임 플레이 인게임 스크린샷 (HUD 포함)
-> *(여기에 인게임 스크린샷을 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 인게임 스크린샷 삽입)*
 
 > **[그림 8]** 인벤토리 및 UI 스크린샷
-> *(여기에 인벤토리 창이 열려있는 UI 스크린샷을 삽입해주세요)*
+> *(최종 PDF 편집 단계에서 인벤토리 창이 열려있는 UI 스크린샷 삽입)*
 
 ---
 
@@ -719,16 +725,20 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 - **OS 및 개발 환경**: macOS, C++17
 - **주요 라이브러리**: CMake, SDL2 (image, mixer, ttf), ENet, cJSON, MySQL (Connector)
 - **빌드 방식**: CMake 빌드 도구를 활용 (`cmake --build build`)
+- **실행 방식**: `run_game.sh`로 서버와 클라이언트를 함께 실행하거나, `build/bin/DeadZoneServer`와 `build/bin/DeadZoneClient`를 각각 실행합니다. 클라이언트는 실행 파일 위치를 기준으로 `assets/`, `data/`를 읽도록 구성했습니다.
+- **DB 설정**: `.env.server` 또는 환경변수(`DEADZONE_DB_HOST`, `DEADZONE_DB_USER`, `DEADZONE_DB_PASS`, `DEADZONE_DB_NAME`)로 MySQL 접속 정보를 설정합니다. DB가 없으면 로그인은 차단되며, 로컬 테스트 전용으로만 `DEADZONE_OFFLINE_AUTH=1`을 사용할 수 있습니다.
 
 ### 6.2 구현 완료 주요 기능
 - ECS 기반 자체 서버 구조 구축 및 서버 권한 멀티플레이 연동 완료
 - 상태 기반 좀비 AI (시야 검사, 소음 반응, 장애물 우회) 구현
 - 동적 상호작용 시스템 (화염 전파, 건물/문 파괴, 포탑 건설, 탈출존 오픈)
-- 인벤토리 기반 파밍 및 데이터베이스 연동 영속화 처리
+- 인벤토리 기반 파밍, 장비 장착, 아이템 드랍, DB 연동 영속화 및 명시적 로컬 테스트 인증 우회 처리
 
 ### 6.3 미완성 사항 및 한계점
 - 좀비 개체 수가 맵 전역에 다수 스폰될 시, 충돌 처리나 탐색에서 전체 엔티티 순회가 발생하여 O(N²) 성능 병목 우려가 존재합니다. 향후 QuadTree 등 공간 분할 최적화가 요구됩니다.
-- DB 연결 오류 시 임시 오프라인 모드로의 우회 로직이 일부 제약이 있어, 서버 안정화 측면에서 추가 작업이 필요합니다.
+- DB 미설정 환경에서는 기본 로그인이 차단됩니다. 로컬 테스트용 인증 우회(`DEADZONE_OFFLINE_AUTH=1`)를 켠 경우 계정·인벤토리 영속 저장은 수행되지 않으므로 발표용 서버에서는 MySQL 접속 설정 검증이 필요합니다.
+- `data/sounds.json`에는 세분화된 사운드 키가 정의되어 있으나, 현재 실제 런타임에서 사용하는 기본 효과음 위주로 파일이 존재합니다. 발표 빌드에서는 누락 사운드 로그가 발생하지 않도록 키-파일 매칭 정리가 필요합니다.
+- `smg_9mm` 전용 아이콘은 별도 PNG 에셋으로 추가했습니다. 남은 에셋 보강 항목은 세분화된 사운드 파일 매칭입니다.
 
 ### 6.4 배운 점 및 소감
 - **팀원 A**: C++ 코어 레벨에서 ECS를 직접 설계하고 클라이언트 예측-롤백 모델을 구현하면서, 메모리 연속성과 서버-클라이언트 상태 동기화 문제의 높은 복잡도를 깊이 이해하게 되었습니다.

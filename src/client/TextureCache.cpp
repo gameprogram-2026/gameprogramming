@@ -126,6 +126,8 @@ void TextureCache::loadItemIcons() {
     for (auto& c : cells)
         loadFromSheet(c.key, sheet, CW, CH, c.col, c.row);
 
+    load("icon_smg_9mm", "assets/sprites/items/icon_smg_9mm.png");
+
     DZ_LOG_INFO("[TextureCache] Item icons loaded");
 }
 

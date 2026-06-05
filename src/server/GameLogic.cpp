@@ -14,11 +14,21 @@ namespace dz {
 
 namespace {
 
+constexpr int TEST_LOOT_PICKUP_MULTIPLIER = 4;
+
 struct ItemDef {
     uint32_t id;
     ItemCategory category;
     float weight;
 };
+
+bool shouldMultiplyLootPickup(ItemCategory category) noexcept {
+    return category == ItemCategory::Ammo ||
+           category == ItemCategory::Consumable ||
+           category == ItemCategory::Throwable ||
+           category == ItemCategory::BuildMaterial ||
+           category == ItemCategory::Misc;
+}
 
 ItemDef itemDefForKey(const std::string& key) {
     if (key == "scrap_pipe")      return {1,  ItemCategory::Weapon,        1.5f};
@@ -116,11 +126,28 @@ void GameLogic::handleFireThrow(uint32_t ownerID,
 
     auto* inv = m_world.tryGet<InventoryComponent>(e);
     if (inv) {
+        bool consumed = false;
         for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
             if (inv->slots[i].isValid() && inv->slots[i].key == "molotov") {
                 inv->removeItem(i);
+                consumed = true;
                 break;
             }
+        }
+        if (!consumed) {
+            for (auto& item : inv->equipped) {
+                if (item.isValid() && item.key == "molotov") {
+                    --item.quantity;
+                    if (item.quantity <= 0) item = {};
+                    consumed = true;
+                    break;
+                }
+            }
+        }
+        if (!consumed) return;
+        inv->recalculateGridStats();
+        if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
+            net->markDirty(DIRTY_INVENTORY);
         }
     }
 
@@ -340,7 +367,11 @@ void GameLogic::handleLootPickup(uint32_t ownerID, uint32_t lootNetID) {
         InventoryComponent nextInv = *inv;
         for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
             if (!linv->slots[i].isValid()) continue;
-            if (!nextInv.addItem(linv->slots[i])) {
+            Item pickupItem = linv->slots[i];
+            if (shouldMultiplyLootPickup(pickupItem.category)) {
+                pickupItem.quantity *= TEST_LOOT_PICKUP_MULTIPLIER;
+            }
+            if (!nextInv.addItem(pickupItem)) {
                 inv->recalculateGridStats();
                 DZ_LOG_WARN("[Logic] Loot %u pickup blocked for owner %u; slots=%d/%d weight=%.1f/%.1f",
                             lootNetID, ownerID, inv->usedSlots, INVENTORY_GRID_SLOTS,
@@ -430,21 +461,17 @@ bool GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
         }
     }
 
-    // 인벤토리 여유 공간 확인
-    if (inv->isFull()) {
-        DZ_LOG_DEBUG("[Craft] %u: inventory full", ownerID);
-        return false;
-    }
+    InventoryComponent nextInv = *inv;
 
     // 재료 소비
     for (int ii = 0; ii < rec.ingredientCount; ++ii) {
         int toRemove = rec.ingredients[ii].qty;
         for (int si = 0; si < INVENTORY_GRID_SLOTS && toRemove > 0; ++si) {
-            if (!inv->slots[si].isValid() || inv->slots[si].key != rec.ingredients[ii].key) continue;
-            int take = std::min(toRemove, inv->slots[si].quantity);
-            inv->slots[si].quantity -= take;
+            if (!nextInv.slots[si].isValid() || nextInv.slots[si].key != rec.ingredients[ii].key) continue;
+            int take = std::min(toRemove, nextInv.slots[si].quantity);
+            nextInv.slots[si].quantity -= take;
             toRemove -= take;
-            if (inv->slots[si].quantity <= 0) inv->removeItem(si);
+            if (nextInv.slots[si].quantity <= 0) nextInv.removeItem(si);
         }
     }
 
@@ -456,7 +483,11 @@ bool GameLogic::handleCraftRequest(uint32_t ownerID, uint8_t recipeID) {
     result.category = def.category;
     result.quantity = rec.resultQty;
     result.weight   = def.weight;
-    inv->addItem(result);
+    if (!nextInv.addItem(result)) {
+        DZ_LOG_DEBUG("[Craft] %u: no room or overweight for result %s", ownerID, rec.resultKey);
+        return false;
+    }
+    *inv = nextInv;
     if (auto* net = m_world.tryGet<NetworkComponent>(e)) {
         net->markDirty(DIRTY_INVENTORY);
     }

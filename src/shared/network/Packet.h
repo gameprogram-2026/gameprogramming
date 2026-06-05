@@ -314,6 +314,13 @@ struct JoinMatchPacket {
     uint8_t  packetType = static_cast<uint8_t>(PacketType::C2S_JoinMatch);
 };
 
+// 클라이언트 → 서버: 화염병 투척 (CHAN_RELIABLE)
+struct FireThrowPacket {
+    uint8_t packetType = static_cast<uint8_t>(PacketType::C2S_FireThrow);
+    float   targetX    = 0.0f;
+    float   targetY    = 0.0f;
+};
+
 // 서버 → 클라이언트: 포탑 발사 이벤트 (레이저 빔 시각화용, CHAN_UNRELIABLE)
 struct TurretFirePacket {
     uint8_t  packetType  = static_cast<uint8_t>(PacketType::S2C_TurretFire);

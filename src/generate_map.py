@@ -172,10 +172,10 @@ for (bx, by, bw, bh) in blocks:
 
     # 블록 크기에 맞게 건물 수 결정
     area = bw * bh
-    n_buildings = 1 if area < 600 else (2 if area < 1800 else 3)
+    n_buildings = 1 if area < 400 else (2 if area < 1000 else (3 if area < 2500 else 4))
 
-    for _ in range(n_buildings * 4):  # 배치 시도
-        if len([b for b in buildings if zone_theme(b['x']+b['w']//2, b['y']+b['h']//2)==theme]) >= {0:10,1:7,2:8,3:8}[theme]:
+    for _ in range(n_buildings * 6):  # 배치 시도
+        if len([b for b in buildings if zone_theme(b['x']+b['w']//2, b['y']+b['h']//2)==theme]) >= {0:15,1:12,2:12,3:12}[theme]:
             break
         max_w = min(wmax, bw-4)
         max_h = min(hmax, bh-4)
@@ -244,7 +244,7 @@ def find_spawn(cx, cy):
                     return tx, ty
     return cx, cy
 
-spawn_corners = [(10, 10), (185, 10), (10, 185), (185, 185)]
+spawn_corners = [(25, 25), (150, 25), (25, 170), (165, 170)]
 player_spawns = [{"team": i+1, "x": x, "y": y}
                  for i, (x, y) in enumerate(find_spawn(*c) for c in spawn_corners)]
 

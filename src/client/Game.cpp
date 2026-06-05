@@ -3,7 +3,10 @@
 #include "shared/network/Packet.h"
 #include "shared/MapSetup.h"
 #include "shared/ItemData.h"
+#include "shared/ecs/components/InventoryComponent.h"
 #include "shared/ecs/components/BuildingComponent.h"
+#include "shared/ecs/components/CombatComponent.h"
+#include "shared/ecs/components/HealthComponent.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <cmath>
@@ -160,8 +163,10 @@ int Game::run(const std::string& serverHost, uint16_t port) {
         m_audio.loadSound("siren", "assets/sounds/siren.wav");
     }
 
-    if (!m_map.loadFromJSON("data/map.json"))
+    if (!m_map.loadFromJSON("data/map.json")) {
+        DZ_LOG_ERROR("[Client] data/map.json load failed; using fallback 80x80 map");
         m_map = TileMap(80, 80);
+    }
 
     // 탈출존을 map.json에서 파싱된 값으로 동기화 (서버와 좌표 일치)
     m_extractionZones.clear();
@@ -456,7 +461,7 @@ void Game::runConnecting() {
 
     // 타임아웃
     m_net.disconnect();
-    m_state     = GameState::Lobby;
+    m_state     = GameState::Login;
     m_statusMsg = "서버 응답 없음 — 다시 시도하세요";
 }
 
@@ -695,14 +700,14 @@ bool Game::hitTestInventorySlot(int mx, int my,
 // ─────────────────────────────────────────────────────────────────────────────
 // 핫바 소모품 슬롯 → 그리드 인덱스 매핑
 // ─────────────────────────────────────────────────────────────────────────────
-void Game::getHotbarConsumables(int outIdx[3]) const {
+void Game::getHotbarConsumables(int outIdx[4]) const {
     int found = 0;
-    for (int i = 0; i < 20 && found < 3; ++i) {
+    for (int i = 0; i < 20 && found < 4; ++i) {
         const InventoryItem& s = m_inventory.gridSlots[i];
-        if (s.isValid() && !ClientInventory::isWeaponItem(s.name))
+        if (s.isValid() && !ClientInventory::isEquipItem(s.name))
             outIdx[found++] = i;
     }
-    while (found < 3) outIdx[found++] = -1;
+    while (found < 4) outIdx[found++] = -1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -712,6 +717,53 @@ void Game::useConsumable(int gridIdx) {
     if (gridIdx < 0 || gridIdx >= 20) return;
     InventoryItem& item = m_inventory.gridSlots[gridIdx];
     if (!item.isValid()) return;
+
+    auto consumeLocalOne = [&]() {
+        m_inventory.totalWeight -= item.weight;
+        --item.qty;
+        if (item.qty <= 0) {
+            item = InventoryItem{};
+            --m_inventory.usedSlots;
+        }
+    };
+
+    if (item.name == "molotov") {
+        constexpr float THROW_DIST = 180.0f;
+        float rad = m_curInput.aimAngle * (3.14159265f / 180.0f);
+        float tx  = m_net.localX() + std::sin(rad) * THROW_DIST;
+        float ty  = m_net.localY() - std::cos(rad) * THROW_DIST;
+        m_net.sendFireThrow(tx, ty);
+        m_renderer.spawnThrownMolotov(m_net.localX(), m_net.localY(), tx, ty);
+        m_renderer.spawnSoundRing(tx, ty, 400.0f, {255, 80, 0, 200});
+        m_cameraShakeTimer     = 0.12f;
+        m_cameraShakeIntensity = 4.0f;
+        consumeLocalOne();
+        return;
+    }
+
+    if (m_state == GameState::InGame) {
+        int buildType = -1;
+        if (item.name == "scrap_metal") buildType = 0;
+        else if (item.name == "electronic_part") buildType = 1;
+        else if (item.name == "plank") buildType = 2;
+        if (buildType >= 0) {
+            static const char* names[] = {"바리케이드","포탑","제작대"};
+            m_buildMode = true;
+            m_buildType = buildType;
+            m_showInventory = false;
+            m_drag = DragState{};
+            m_notifyMsg = std::string(names[buildType]) + " — 클릭으로 설치";
+            m_notifyTimer = 2.0f;
+            return;
+        }
+    }
+
+    if (item.name == "ammo_9mm") {
+        m_curInput.actions |= ACT_RELOAD;
+        m_notifyMsg = "장전 요청";
+        m_notifyTimer = 1.0f;
+        return;
+    }
 
     // 서버에 소모품 사용 요청 전송 (서버가 HP를 갱신하고 HpSync로 응답)
     // 현재 item.name은 서버에서 전달된 원본 key("medkit", "bandage" 등)를 가지고 있습니다.
@@ -732,12 +784,7 @@ void Game::useConsumable(int gridIdx) {
     m_renderer.spawnHealEffect(m_net.localX(), m_net.localY());
 
     // 클라이언트 인벤토리에서 즉시 제거 (낙관적 업데이트)
-    m_inventory.totalWeight -= item.weight;
-    --item.qty;
-    if (item.qty <= 0) {
-        item = InventoryItem{};
-        --m_inventory.usedSlots;
-    }
+    consumeLocalOne();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -763,7 +810,6 @@ void Game::processInventoryMouse() {
                 item = m_inventory.primaryWeapon;
             else if (src == DragState::Src::Secondary)
                 item = m_inventory.secondaryWeapon;
-
             if (item.isValid()) {
                 const DismantlePreviewRecipe* recipe = findDismantlePreview(item.name);
                 if (!recipe) {
@@ -941,14 +987,14 @@ void Game::processInventoryMouse() {
                     dstItem = m_inventory.stashSlots[dstIdx];
 
                 // 무기 슬롯에는 무기만 허용
-                bool srcIsWeapon = ClientInventory::isWeaponItem(m_drag.item.name);
-                bool dstIsWeapon = dstItem.isValid() && ClientInventory::isWeaponItem(dstItem.name);
+                bool srcIsEquipItem = ClientInventory::isEquipItem(m_drag.item.name);
+                bool dstIsEquipItem = dstItem.isValid() && ClientInventory::isEquipItem(dstItem.name);
                 bool srcIsEquip  = (m_drag.src == DragState::Src::Primary ||
                                     m_drag.src == DragState::Src::Secondary);
                 bool dstIsEquip  = (dstSrc == DragState::Src::Primary ||
                                     dstSrc == DragState::Src::Secondary);
-                bool canDrop = (!dstIsEquip || srcIsWeapon) &&
-                               (!srcIsEquip || !dstItem.isValid() || dstIsWeapon);
+                bool canDrop = (!dstIsEquip || srcIsEquipItem) &&
+                               (!srcIsEquip || !dstItem.isValid() || dstIsEquipItem);
 
                 if (canDrop) {
                     // 소스에서 아이템 제거
@@ -1104,6 +1150,13 @@ void Game::processEvents() {
             if (m_craftScroll > MAX_SCROLL) m_craftScroll = MAX_SCROLL;
         }
         processCraftingMouse();
+    } else {
+        // 인벤토리/제작UI 닫혀있을 때: 마우스 휠로 카메라 줌 조정
+        int zoomWheel = m_input.consumeWheel();
+        if (zoomWheel != 0) {
+            m_camera.zoom *= std::pow(1.15f, static_cast<float>(zoomWheel));
+            m_camera.zoom = std::max(1.0f, std::min(3.0f, m_camera.zoom));
+        }
     }
 
     bool curI = m_input.isKeyDown(SDL_SCANCODE_I);
@@ -1199,53 +1252,35 @@ void Game::processEvents() {
         return;
     }
 
-    if (m_hotbarSelected == 1 &&
-        (!m_inventory.secondaryWeapon.isValid() ||
-         !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
-        m_hotbarSelected = 0;
-    }
-
-    bool curQ = m_input.isKeyDown(SDL_SCANCODE_Q);
-    if (curQ && !m_prevQ) {
-        const bool primaryReady = m_inventory.primaryWeapon.isValid() &&
-                                  ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name);
-        const bool secondaryReady = m_inventory.secondaryWeapon.isValid() &&
-                                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name);
-        if (m_hotbarSelected == 0 && secondaryReady) {
-            m_hotbarSelected = 1;
-            m_net.sendSelectWeapon(1);
-            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
-        } else if (primaryReady) {
-            m_hotbarSelected = 0;
-            m_net.sendSelectWeapon(0);
-            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
-        }
-    }
-    m_prevQ = curQ;
-
     static const SDL_Scancode NUM_SCANCODES[5] = {
         SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5
     };
-    int hotbarConsIdx[3];
+    int hotbarConsIdx[4];
     getHotbarConsumables(hotbarConsIdx);
     for (int i = 0; i < 5; ++i) {
         bool cur = m_input.isKeyDown(NUM_SCANCODES[i]);
         if (cur && !m_prevNum[i]) {
             if (i == 0) {
+                // 키 1: 주무기 선택
                 if (m_inventory.primaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
+                    ClientInventory::isEquipItem(m_inventory.primaryWeapon.name)) {
                     m_hotbarSelected = 0;
                     m_net.sendSelectWeapon(0);
                     m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
                 }
             } else if (i == 1) {
+                // 키 2: 보조/투척 장비 선택
                 if (m_inventory.secondaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name)) {
+                    ClientInventory::isEquipItem(m_inventory.secondaryWeapon.name)) {
                     m_hotbarSelected = 1;
                     m_net.sendSelectWeapon(1);
                     m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+                } else {
+                    m_hotbarSelected = i;
+                    useConsumable(hotbarConsIdx[0]);
                 }
             } else {
+                // 키 3-5: 사용 아이템
                 m_hotbarSelected = i;
                 useConsumable(hotbarConsIdx[i-2]);
             }
@@ -1253,21 +1288,52 @@ void Game::processEvents() {
         m_prevNum[i] = cur;
     }
 
-    const auto& activeWeapon = (m_hotbarSelected == 1)
+    const auto& activeWeapon = (m_hotbarSelected == 1 && m_inventory.secondaryWeapon.isValid())
                                  ? m_inventory.secondaryWeapon
                                  : m_inventory.primaryWeapon;
-    const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isWeaponItem(activeWeapon.name);
+    const bool hasWeapon = activeWeapon.isValid() && ClientInventory::isEquipItem(activeWeapon.name);
     const bool isPistol = hasWeapon && activeWeapon.name == "pistol_9mm";
     const bool isSMG = hasWeapon && activeWeapon.name == "smg_9mm";
     const bool isFlamethrower = hasWeapon && activeWeapon.name == "flamethrower";
+    const bool isMolotov = hasWeapon && activeWeapon.name == "molotov";
     const bool isRanged = isPistol || isSMG || isFlamethrower;
     if (!isPistol && !isSMG) {
         m_curInput.actions &= ~ACT_RELOAD;
     }
 
+    if (isMolotov) {
+        const bool holdingThrow = (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) != 0;
+        if (holdingThrow && m_attackTimer <= 0.0f) {
+            m_molotovCharging = true;
+            m_molotovCharge = std::min(1.0f, m_molotovCharge + m_curInput.dt * 0.9f);
+            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+        }
+
+        int releaseX = 0, releaseY = 0;
+        if (m_molotovCharging && m_input.consumeMouseUp(releaseX, releaseY) && m_attackTimer <= 0.0f) {
+            const float charge = std::max(0.25f, m_molotovCharge);
+            const float throwDist = 110.0f + charge * 290.0f;
+            float rad = m_curInput.aimAngle * (3.14159265f / 180.0f);
+            float tx  = m_net.localX() + std::sin(rad) * throwDist;
+            float ty  = m_net.localY() - std::cos(rad) * throwDist;
+            m_net.sendFireThrow(tx, ty);
+            m_renderer.spawnThrownMolotov(m_net.localX(), m_net.localY(), tx, ty);
+            m_renderer.spawnSoundRing(tx, ty, 400.0f, {255, 80, 0, 200});
+            m_cameraShakeTimer     = 0.12f;
+            m_cameraShakeIntensity = 4.0f;
+            m_attackTimer = 1.2f;
+            m_molotovCharging = false;
+            m_molotovCharge = 0.0f;
+            m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
+        }
+    } else {
+        m_molotovCharging = false;
+        m_molotovCharge = 0.0f;
+    }
+
     if (m_curInput.actions & (ACT_SHOOT | ACT_MELEE)) {
         const auto& wpn = activeWeapon;
-        if (!hasWeapon) {
+        if (!hasWeapon || isMolotov) {
             m_curInput.actions &= ~(ACT_SHOOT | ACT_MELEE);
         } else {
             if (isRanged) {
@@ -1297,9 +1363,12 @@ void Game::processEvents() {
                     m_cameraShakeIntensity = isSMG ? 3.0f : 6.0f;
                     m_renderer.spawnMuzzleFlash(m_net.localX(), m_net.localY(), m_attackAngle);
                     m_renderer.spawnCasing(m_net.localX(), m_net.localY(), m_attackAngle);
+                    float ringR = isSMG ? 560.0f : 400.0f;
+                    m_renderer.spawnSoundRing(m_net.localX(), m_net.localY(), ringR, {255, 160, 40, 180});
                 } else if (isFlamethrower) {
                     m_cameraShakeTimer = 0.08f;
                     m_cameraShakeIntensity = 2.0f;
+                    m_renderer.spawnFlameEffect(m_net.localX(), m_net.localY(), m_attackAngle);
                 } else {
                     m_audio.playSound("swing", 0.8f);
                     m_cameraShakeTimer = 0.1f;
@@ -1345,32 +1414,39 @@ void Game::processInventorySync() {
                 newInv.gridSlots[i].qty = sync.gridSlots[i].quantity;
                 newInv.gridSlots[i].weight = sync.gridSlots[i].weight;
                 newInv.gridSlots[i].grade = "normal";
-                totalW += sync.gridSlots[i].weight * sync.gridSlots[i].quantity;
+                const auto category = static_cast<ItemCategory>(sync.gridSlots[i].category);
+                totalW += (category == ItemCategory::Weapon)
+                            ? sync.gridSlots[i].weight
+                            : sync.gridSlots[i].weight * sync.gridSlots[i].quantity;
             }
         }
-        for (int i=0; i<2; ++i) {
-            if (sync.equipped[i].itemID != 0) {
-                InventoryItem eq;
-                eq.name = sync.equipped[i].key;
-                eq.qty = sync.equipped[i].quantity;
-                eq.weight = sync.equipped[i].weight;
-                eq.grade = "normal";
-                totalW += sync.equipped[i].weight * sync.equipped[i].quantity;
-                if (i == 0) newInv.primaryWeapon = eq;
-                if (i == 1) newInv.secondaryWeapon = eq;
-            }
+        // 주무기 슬롯(equipped[0])만 사용
+        if (sync.equipped[0].itemID != 0) {
+            InventoryItem eq;
+            eq.name = sync.equipped[0].key;
+            eq.qty = sync.equipped[0].quantity;
+            eq.weight = sync.equipped[0].weight;
+            eq.grade = "normal";
+            const auto category = static_cast<ItemCategory>(sync.equipped[0].category);
+            totalW += (category == ItemCategory::Weapon)
+                        ? sync.equipped[0].weight
+                        : sync.equipped[0].weight * sync.equipped[0].quantity;
+            newInv.primaryWeapon = eq;
+        }
+        if (sync.equipped[1].itemID != 0) {
+            InventoryItem eq;
+            eq.name = sync.equipped[1].key;
+            eq.qty = sync.equipped[1].quantity;
+            eq.weight = sync.equipped[1].weight;
+            eq.grade = "normal";
+            const auto category = static_cast<ItemCategory>(sync.equipped[1].category);
+            totalW += (category == ItemCategory::Weapon)
+                        ? sync.equipped[1].weight
+                        : sync.equipped[1].weight * sync.equipped[1].quantity;
+            newInv.secondaryWeapon = eq;
         }
         newInv.totalWeight = totalW;
         m_inventory = newInv;
-        if (m_hotbarSelected == 1 &&
-            (!m_inventory.secondaryWeapon.isValid() ||
-             !ClientInventory::isWeaponItem(m_inventory.secondaryWeapon.name))) {
-                m_hotbarSelected = 0;
-                if (m_inventory.primaryWeapon.isValid() &&
-                    ClientInventory::isWeaponItem(m_inventory.primaryWeapon.name)) {
-                    m_net.sendSelectWeapon(0);
-                }
-            }
         m_net.clearInventorySync();
     }
 
@@ -1418,13 +1494,22 @@ void Game::update(float dt) {
     else if (m_curInput.moveY > 0.1f)  { m_charDir = 0; m_charMoving = true; }
     else                               { m_charMoving = false; }
 
-    // 발자국 소리 재생
+    // 발자국 소리/소음 범위 표현
     if (m_curInput.moveX != 0 || m_curInput.moveY != 0) {
-        float stepInterval = (m_curInput.actions & ACT_SPRINT) ? 0.25f : 0.4f;
-        m_footstepTimer += dt;
-        if (m_footstepTimer >= stepInterval) {
-            m_audio.playSound("footstep", 0.6f);
-            m_footstepTimer -= stepInterval;
+        const bool crouching = (m_curInput.actions & ACT_CROUCH) != 0;
+        const bool sprinting = (m_curInput.actions & ACT_SPRINT) && !crouching;
+        if (crouching) {
+            m_footstepTimer = 0.0f;
+        } else {
+            float stepInterval = sprinting ? 0.25f : 0.4f;
+            m_footstepTimer += dt;
+            if (m_footstepTimer >= stepInterval) {
+                m_audio.playSound("footstep", 0.6f);
+                m_footstepTimer -= stepInterval;
+                float fRadius = sprinting ? NOISE_RUN_RADIUS : NOISE_WALK_RADIUS;
+                SDL_Color fColor = sprinting ? SDL_Color{180, 210, 255, 120} : SDL_Color{160, 190, 255, 70};
+                m_renderer.spawnSoundRing(m_net.localX(), m_net.localY(), fRadius, fColor);
+            }
         }
     } else {
         m_footstepTimer = 0.0f;
@@ -1442,14 +1527,49 @@ void Game::update(float dt) {
     // 타격 이벤트 처리 (원격 엔티티 피격 시)
     // attackerID == 0 = 환경 데미지(태양/불) → 소리 무시 (20Hz 반복 방지)
     for (const auto& ev : m_net.damageEvents()) {
+        float attackerX = 0.0f, attackerY = 0.0f;
+        float victimX = 0.0f, victimY = 0.0f;
+        bool haveAttacker = false;
+        bool haveVictim = false;
+        if (ev.attackerID == m_net.localNetID()) {
+            attackerX = m_net.localX(); attackerY = m_net.localY(); haveAttacker = true;
+        }
+        if (ev.victimID == m_net.localNetID()) {
+            victimX = m_net.localX(); victimY = m_net.localY(); haveVictim = true;
+        }
         if (ev.victimID != m_net.localNetID() && ev.attackerID > 0) {
             m_audio.playSound("hit", 0.7f);
             for (int i = 0; i < m_net.remoteCount(); ++i) {
                 const auto& rem = m_net.remotes()[i];
                 if (rem.entityID == ev.victimID) {
+                    victimX = rem.snap[1].x; victimY = rem.snap[1].y; haveVictim = true;
                     m_renderer.spawnBlood(rem.snap[1].x, rem.snap[1].y);
                     break;
                 }
+            }
+        }
+        if (ev.attackerID != m_net.localNetID() && ev.attackerID > 0) {
+            for (int i = 0; i < m_net.remoteCount(); ++i) {
+                const auto& rem = m_net.remotes()[i];
+                if (rem.entityID == ev.attackerID) {
+                    attackerX = rem.snap[1].x; attackerY = rem.snap[1].y; haveAttacker = true;
+                    break;
+                }
+            }
+        }
+        if (haveAttacker && haveVictim && ev.attackerID != m_net.localNetID()) {
+            const float dx = victimX - attackerX;
+            const float dy = victimY - attackerY;
+            const float rad = std::atan2(dy, dx);
+            const auto type = static_cast<DamageType>(ev.damageType);
+            if (type == DamageType::Bullet) {
+                m_renderer.spawnMuzzleFlash(attackerX, attackerY, rad);
+                m_renderer.spawnCasing(attackerX, attackerY, rad);
+            } else if (type == DamageType::Melee || type == DamageType::Zombie) {
+                m_renderer.spawnMeleeArc(attackerX, attackerY, rad);
+            } else if (type == DamageType::Fire || type == DamageType::Explosion) {
+                const float deg = rad * 180.0f / 3.14159265f;
+                m_renderer.spawnFlameEffect(attackerX, attackerY, deg);
             }
         }
     }
@@ -1485,6 +1605,7 @@ void Game::update(float dt) {
     m_camera.y += (targetY - m_camera.y) * camSpeed * dt;
     
     m_renderer.updateParticles(dt);
+    m_renderer.updateSoundRings(dt);
 
     // 공격 모션 타이머 감소
     if (m_attackTimer  > 0.0f) m_attackTimer  -= dt;
@@ -1621,6 +1742,7 @@ void Game::renderIngame() {
     }
 
     m_renderer.drawParticles(m_camera);
+    m_renderer.drawSoundRings(m_camera);
 
     // 4+5. 원격 + 로컬 엔티티 + 건물 + 파밍 상자를 y-sort 후 통합 그리기 (입체감)
     float hpPct    = m_net.localHp() / std::max(1.0f, m_net.localMaxHp());
@@ -1652,6 +1774,24 @@ void Game::renderIngame() {
                                   teamID, wName, wGrade,
                                   m_attackTimer, m_attackAngle,
                                   m_charDir, m_charMoving);
+
+    if (m_molotovCharging) {
+        const int barW = 220;
+        const int barH = 12;
+        const int x = m_camera.screenW / 2 - barW / 2;
+        const int y = m_camera.screenH - 150;
+        SDL_SetRenderDrawBlendMode(m_renderer.raw(), SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(m_renderer.raw(), 18, 18, 24, 210);
+        SDL_Rect bg = {x, y, barW, barH};
+        SDL_RenderFillRect(m_renderer.raw(), &bg);
+        SDL_SetRenderDrawColor(m_renderer.raw(), 255, 125, 35, 235);
+        SDL_Rect fg = {x + 2, y + 2, static_cast<int>((barW - 4) * std::min(1.0f, m_molotovCharge)), barH - 4};
+        SDL_RenderFillRect(m_renderer.raw(), &fg);
+        SDL_SetRenderDrawColor(m_renderer.raw(), 255, 210, 120, 220);
+        SDL_RenderDrawRect(m_renderer.raw(), &bg);
+        m_renderer.drawText("화염병 투척 거리", m_camera.screenW / 2, y - 20,
+                            {255, 210, 150, 230}, nullptr, true);
+    }
 
     // 5-b. 시야각 안개 (120도, 마우스 방향)
     m_renderer.drawFOV(m_net.localX(), m_net.localY(),
@@ -1727,7 +1867,7 @@ void Game::renderIngame() {
 
     // 8. 핫바 (항상 표시)
     {
-        int hotbarConsIdx[3];
+        int hotbarConsIdx[4];
         getHotbarConsumables(hotbarConsIdx);
         int mx, my;
         m_input.mousePos(mx, my);

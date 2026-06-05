@@ -116,6 +116,7 @@ public:
     void sendStashTransfer(uint8_t srcType, uint8_t srcIdx, uint8_t dstType, uint8_t dstIdx);
     void sendSelectWeapon(uint8_t slot);
     void sendDoorToggle(uint16_t doorID);
+    void sendFireThrow(float targetX, float targetY);
 
     bool     isConnected()   const noexcept { return m_peer != nullptr; }
     bool     isAuthenticated() const noexcept { return m_isAuthenticated; }

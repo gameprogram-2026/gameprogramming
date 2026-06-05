@@ -46,6 +46,24 @@ static SDL_Color districtColor(int theme, uint8_t alpha) {
     }
 }
 
+static std::string utf8Prefix(const std::string& text, size_t maxCodepoints) {
+    size_t bytePos = 0;
+    size_t codepoints = 0;
+    while (bytePos < text.size() && codepoints < maxCodepoints) {
+        const unsigned char ch = static_cast<unsigned char>(text[bytePos]);
+        size_t charBytes = 1;
+        if ((ch & 0x80) == 0x00) charBytes = 1;
+        else if ((ch & 0xE0) == 0xC0) charBytes = 2;
+        else if ((ch & 0xF0) == 0xE0) charBytes = 3;
+        else if ((ch & 0xF8) == 0xF0) charBytes = 4;
+        else break;
+        if (bytePos + charBytes > text.size()) break;
+        bytePos += charBytes;
+        ++codepoints;
+    }
+    return text.substr(0, bytePos);
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 건물 정의 — 대형 + 다중 문 (데드타운 스타일)
@@ -93,6 +111,8 @@ void Renderer::shutdown() {
 }
 
 void Renderer::beginFrame() {
+    SDL_RenderSetClipRect(m_renderer, nullptr); // 이전 프레임 클립 초기화
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(m_renderer, Col::BG.r, Col::BG.g, Col::BG.b, 255);
     SDL_RenderClear(m_renderer);
 }
@@ -809,7 +829,7 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
 // 건물 렌더링 — 문은 마커로 (구멍 없음)
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX, float localY) {
-    const int WALL_T = static_cast<int>(TILE_SIZE * cam.zoom);
+    const int WALL_T = std::max(1, static_cast<int>(std::round(TILE_SIZE * cam.zoom)));
 
     const auto& buildings = map.getBuildings();
     for (size_t buildingIdx = 0; buildingIdx < buildings.size(); ++buildingIdx) {
@@ -820,7 +840,8 @@ void Renderer::drawBuildings(const TileMap& map, const Camera& cam, float localX
         if (sx2 < -10 || sx1 > m_screenW+10 || sy2 < -10 || sy1 > m_screenH+10) continue;
 
         int pw = sx2-sx1, ph = sy2-sy1;
-        int tsz = static_cast<int>(TILE_SIZE * cam.zoom); 
+        if (pw <= 0 || ph <= 0) continue;
+        int tsz = std::max(1, static_cast<int>(std::round(TILE_SIZE * cam.zoom)));
         
         SDL_Color floorCol, wallCol, roofCol;
         bool hasRoom = false;
@@ -1447,6 +1468,93 @@ static void drawCharacterBody(Renderer* rnd, int sx, int sy, int sz, float angle
         // 헬멧 / 모자
         rnd->drawFilledCircle(headX, headY - 3, headRad, {50, 50, 60, 255});
         rnd->drawFilledCircle(headX + static_cast<int>(dx*headRad*0.6f), headY, 3, {20, 20, 20, 255}); // 고글
+    }
+}
+
+static void drawHeldWeapon(Renderer* renderer, int sx, int bodyCenterY, int sz,
+                           float angleDeg, const std::string& weaponName) {
+    if (weaponName.empty()) return;
+
+    SDL_Renderer* sdlRenderer = renderer->sdlRenderer();
+    const float angleRad = angleDeg * (3.14159265f / 180.0f);
+    const float forwardX = std::sin(angleRad);
+    const float forwardY = -std::cos(angleRad);
+    const float sideX = std::cos(angleRad);
+    const float sideY = std::sin(angleRad);
+
+    const int handX = sx + static_cast<int>(forwardX * sz * 0.78f);
+    const int handY = bodyCenterY + static_cast<int>(forwardY * sz * 0.78f);
+
+    auto drawThickLine = [&](int startX, int startY, int endX, int endY,
+                             SDL_Color color, int thickness) {
+        SDL_SetRenderDrawColor(sdlRenderer, color.r, color.g, color.b, color.a);
+        for (int offset = -thickness; offset <= thickness; ++offset) {
+            const int offsetX = static_cast<int>(sideX * offset);
+            const int offsetY = static_cast<int>(sideY * offset);
+            SDL_RenderDrawLine(sdlRenderer,
+                               startX + offsetX, startY + offsetY,
+                               endX + offsetX, endY + offsetY);
+        }
+    };
+
+    auto drawGrip = [&]() {
+        const int gripEndX = handX - static_cast<int>(forwardX * sz * 0.10f)
+                                   + static_cast<int>(sideX * sz * 0.22f);
+        const int gripEndY = handY - static_cast<int>(forwardY * sz * 0.10f)
+                                   + static_cast<int>(sideY * sz * 0.22f);
+        drawThickLine(handX, handY, gripEndX, gripEndY, {35, 28, 22, 255}, 2);
+    };
+
+    SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
+    renderer->drawFilledCircle(handX, handY, std::max(2, sz / 7), {230, 180, 150, 255});
+
+    if (weaponName == "pistol_9mm") {
+        const int muzzleX = handX + static_cast<int>(forwardX * sz * 0.95f);
+        const int muzzleY = handY + static_cast<int>(forwardY * sz * 0.95f);
+        drawThickLine(handX, handY, muzzleX, muzzleY, {32, 35, 42, 255}, 3);
+        drawGrip();
+    } else if (weaponName == "smg_9mm") {
+        const int muzzleX = handX + static_cast<int>(forwardX * sz * 1.35f);
+        const int muzzleY = handY + static_cast<int>(forwardY * sz * 1.35f);
+        const int stockX = handX - static_cast<int>(forwardX * sz * 0.45f);
+        const int stockY = handY - static_cast<int>(forwardY * sz * 0.45f);
+        drawThickLine(stockX, stockY, muzzleX, muzzleY, {30, 34, 40, 255}, 4);
+        drawThickLine(handX, handY,
+                      handX + static_cast<int>(sideX * sz * 0.25f),
+                      handY + static_cast<int>(sideY * sz * 0.25f),
+                      {70, 74, 82, 255}, 3);
+        drawGrip();
+    } else if (weaponName == "flamethrower") {
+        const int nozzleX = handX + static_cast<int>(forwardX * sz * 1.45f);
+        const int nozzleY = handY + static_cast<int>(forwardY * sz * 1.45f);
+        const int tankX = handX - static_cast<int>(forwardX * sz * 0.25f)
+                                - static_cast<int>(sideX * sz * 0.32f);
+        const int tankY = handY - static_cast<int>(forwardY * sz * 0.25f)
+                                - static_cast<int>(sideY * sz * 0.32f);
+        drawThickLine(handX, handY, nozzleX, nozzleY, {50, 52, 58, 255}, 4);
+        renderer->drawFilledCircle(tankX, tankY, std::max(3, sz / 4), {95, 72, 50, 255});
+        renderer->drawFilledCircle(nozzleX, nozzleY, std::max(2, sz / 8), {255, 105, 30, 210});
+    } else if (weaponName.find("axe") != std::string::npos) {
+        const int headX = handX + static_cast<int>(forwardX * sz * 1.15f);
+        const int headY = handY + static_cast<int>(forwardY * sz * 1.15f);
+        drawThickLine(handX, handY, headX, headY, {96, 58, 30, 255}, 3);
+        drawThickLine(headX - static_cast<int>(sideX * sz * 0.28f),
+                      headY - static_cast<int>(sideY * sz * 0.28f),
+                      headX + static_cast<int>(sideX * sz * 0.28f),
+                      headY + static_cast<int>(sideY * sz * 0.28f),
+                      {170, 180, 190, 255}, 4);
+    } else if (weaponName.find("bat") != std::string::npos ||
+               weaponName.find("pipe") != std::string::npos) {
+        const int tipX = handX + static_cast<int>(forwardX * sz * 1.25f);
+        const int tipY = handY + static_cast<int>(forwardY * sz * 1.25f);
+        const SDL_Color weaponColor = weaponName.find("pipe") != std::string::npos
+            ? SDL_Color{150, 155, 160, 255}
+            : SDL_Color{135, 86, 44, 255};
+        drawThickLine(handX, handY, tipX, tipY, weaponColor, 4);
+    } else {
+        const int tipX = handX + static_cast<int>(forwardX * sz * 0.9f);
+        const int tipY = handY + static_cast<int>(forwardY * sz * 0.9f);
+        drawThickLine(handX, handY, tipX, tipY, {50, 55, 62, 255}, 3);
     }
 }
 
@@ -2218,9 +2326,42 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
         SDL_Rect wTopLine = {WX, WY, WW - 3, 1};
         SDL_RenderFillRect(m_renderer, &wTopLine);
 
-        // 무기 실루엣
-        SDL_SetRenderDrawColor(m_renderer, wc.r, wc.g, wc.b, 50);
-        if (weaponName == "flamethrower") {
+        // 무기 이미지
+        SDL_Texture* weaponIcon = nullptr;
+        if (!weaponName.empty()) {
+            weaponIcon = m_texCache.get("icon_" + weaponName);
+        }
+
+        if (weaponIcon) {
+            SDL_SetTextureBlendMode(weaponIcon, SDL_BLENDMODE_BLEND);
+
+            int texW = 0, texH = 0;
+            SDL_QueryTexture(weaponIcon, nullptr, nullptr, &texW, &texH);
+            const int maxIconW = 132;
+            const int maxIconH = 52;
+            float scale = (texW > 0 && texH > 0)
+                ? std::min(maxIconW / static_cast<float>(texW),
+                           maxIconH / static_cast<float>(texH))
+                : 1.0f;
+            int iconW = std::max(1, static_cast<int>(texW * scale));
+            int iconH = std::max(1, static_cast<int>(texH * scale));
+            SDL_Rect iconDst = {
+                WX + 12 + (maxIconW - iconW) / 2,
+                WY + 26 + (maxIconH - iconH) / 2,
+                iconW,
+                iconH
+            };
+
+            SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(m_renderer, wc.r, wc.g, wc.b, 32);
+            SDL_Rect iconGlow = {WX + 10, WY + 24, maxIconW + 4, maxIconH + 4};
+            SDL_RenderFillRect(m_renderer, &iconGlow);
+            SDL_RenderCopy(m_renderer, weaponIcon, nullptr, &iconDst);
+        } else {
+            SDL_SetRenderDrawColor(m_renderer, wc.r, wc.g, wc.b, 50);
+        }
+
+        if (!weaponIcon && weaponName == "flamethrower") {
             SDL_Rect tank   = {WX + 14, WY + 30, 34, 44};
             SDL_Rect hose   = {WX + 48, WY + 45, 42, 8};
             SDL_Rect nozzle = {WX + 88, WY + 38, 50, 12};
@@ -2235,7 +2376,7 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
             SDL_SetRenderDrawColor(m_renderer, wc.r, wc.g, wc.b, 120);
             SDL_RenderDrawRect(m_renderer, &tank);
             SDL_RenderDrawRect(m_renderer, &nozzle);
-        } else if (!weaponName.empty() &&
+        } else if (!weaponIcon && !weaponName.empty() &&
                    (weaponName.find("axe") != std::string::npos ||
                     weaponName.find("bat") != std::string::npos ||
                     weaponName.find("pipe") != std::string::npos)) {
@@ -2246,7 +2387,7 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
             SDL_SetRenderDrawColor(m_renderer, wc.r, wc.g, wc.b, 120);
             SDL_RenderDrawRect(m_renderer, &handle);
             SDL_RenderDrawRect(m_renderer, &head);
-        } else {
+        } else if (!weaponIcon) {
             SDL_Rect gunBody  = {WX + 12, WY + 30, 90, 18};
             SDL_Rect gunGrip  = {WX + 70, WY + 48, 14, 22};
             SDL_Rect gunBarrel= {WX + 102, WY + 33, 30, 10};
@@ -2520,10 +2661,25 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
                 SDL_SetRenderDrawColor(m_renderer, nc.r,nc.g,nc.b,100);
                 SDL_Rect gbar = {x+2, y+2, w-4, 3};
                 SDL_RenderFillRect(m_renderer, &gbar);
-                drawText(item.name, x+8, y+24, nc, fSm);
+
+                std::string iconKey = "icon_" + item.name;
+                SDL_Texture* icon = m_texCache.get(iconKey);
+                const int iconSize = 38;
+                SDL_Rect iconDst = {x + 8, y + 20, iconSize, iconSize};
+                if (icon) {
+                    SDL_SetTextureBlendMode(icon, SDL_BLENDMODE_BLEND);
+                    SDL_RenderCopy(m_renderer, icon, nullptr, &iconDst);
+                } else {
+                    SDL_SetRenderDrawColor(m_renderer, nc.r / 3, nc.g / 3, nc.b / 3, 180);
+                    SDL_RenderFillRect(m_renderer, &iconDst);
+                    drawText(item.name.substr(0, 1), iconDst.x + iconSize / 2,
+                             iconDst.y + 10, nc, fSm, true);
+                }
+
+                drawText(item.name, x+54, y+24, nc, fSm);
                 char wbuf[24];
                 std::snprintf(wbuf,sizeof(wbuf),"%.1fkg  x%d", item.weight, item.qty);
-                drawText(wbuf, x+8, y+h-18, Col::TEXT_LO, fMono);
+                drawText(wbuf, x+54, y+h-18, Col::TEXT_LO, fMono);
             } else if (!isDragSource) {
                 drawText("(비어있음)", x+8, y+26, {45,50,65,255}, fSm);
             } else {
@@ -2534,11 +2690,11 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
             }
         };
 
-        drawEquipSlot("주무기",   inv.primaryWeapon,   eqX, eqY,              slotW, slotH, false);
-        drawEquipSlot("보조무기", inv.secondaryWeapon, eqX, eqY+slotH+slotGap, slotW, slotH, false);
+        drawEquipSlot("주무기",   inv.primaryWeapon,   eqX, eqY, slotW, slotH, false);
+        drawEquipSlot("보조/투척", inv.secondaryWeapon, eqX, eqY + slotH + slotGap, slotW, slotH, false);
 
         // 무게 바
-        int wbY = eqY + (slotH+slotGap)*2 + 16;
+        int wbY = eqY + slotH * 2 + slotGap + 16;
         drawText("무게", eqX, wbY, Col::TEXT_LO, fSm);
         float wPct = inv.maxWeight > 0 ? inv.totalWeight/inv.maxWeight : 0.0f;
         drawHpBar(eqX, wbY+18, wPct, slotW, 8);
@@ -2561,9 +2717,7 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
         drawPanel(eqX, tipY, slotW, 88, {12,15,24,220}, {30,38,55,255}, 1);
         drawText("단축키 안내", eqX+8, tipY+6, Col::TEXT_LO, m_fonts.get(11));
         drawText("[1] 주무기 선택", eqX+8, tipY+20, {80,160,255,200}, m_fonts.get(11));
-        drawText("[2] 보조무기 선택", eqX+8, tipY+33, {80,160,255,200}, m_fonts.get(11));
-        drawText("[3-5] 소모품 사용", eqX+8, tipY+46, {80,220,120,200}, m_fonts.get(11));
-        drawText("[Q] 무기 교체", eqX+8, tipY+59, {180,180,180,180}, m_fonts.get(11));
+        drawText("[2-5] 소모품 사용", eqX+8, tipY+33, {80,220,120,200}, m_fonts.get(11));
         drawText("밖으로 드래그: 버리기", eqX+8, tipY+72, {180,180,180,180}, m_fonts.get(11));
 
 
@@ -2638,7 +2792,7 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
                 std::string dname(dispName);
                 // 6자 초과면 첫 줄/둘째 줄 분리
                 if (dname.size() > 8) {
-                    drawText(dname.substr(0,8), cx+CELL_W/2, cy+49, Col::TEXT_HI, m_fonts.get(11), true);
+                    drawText(utf8Prefix(dname, 4), cx+CELL_W/2, cy+49, Col::TEXT_HI, m_fonts.get(11), true);
                 } else {
                     drawText(dname, cx+CELL_W/2, cy+49, Col::TEXT_HI, fSm, true);
                 }
@@ -2798,7 +2952,7 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
 // 슬롯 1-2: 무기, 슬롯 3-5: 소모품
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
-                           const int consumableIdx[3], int mouseX, int mouseY) {
+                           const int consumableIdx[4], int mouseX, int mouseY) {
     TTF_Font* fSm  = m_fonts.get(12);
     TTF_Font* fKey  = m_fonts.get(11);
 
@@ -2818,11 +2972,13 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
         bool hov = (mouseX>=sx && mouseX<sx+SLOT_W &&
                     mouseY>=hbY && mouseY<hbY+SLOT_H);
 
-        // 슬롯 내용 결정
+        // 슬롯 내용 결정: 0=주무기, 1=보조/투척, 2-4=사용 아이템
         const InventoryItem* slotItem = nullptr;
-        if      (s == 0) slotItem = inv.primaryWeapon.isValid()   ? &inv.primaryWeapon   : nullptr;
-        else if (s == 1) slotItem = inv.secondaryWeapon.isValid() ? &inv.secondaryWeapon : nullptr;
-        else {
+        if (s == 0) {
+            slotItem = inv.primaryWeapon.isValid() ? &inv.primaryWeapon : nullptr;
+        } else if (s == 1) {
+            slotItem = inv.secondaryWeapon.isValid() ? &inv.secondaryWeapon : nullptr;
+        } else {
             int ci = consumableIdx[s-2];
             if (ci >= 0 && ci < 20 && inv.gridSlots[ci].isValid())
                 slotItem = &inv.gridSlots[ci];
@@ -2838,7 +2994,6 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
         int bw = selected ? 2 : 1;
         drawPanel(sx, hbY, SLOT_W, SLOT_H, bg, border, bw);
 
-        // 선택 선택 하이라이트 (상단 밝은 줄)
         if (selected) {
             SDL_SetRenderDrawColor(m_renderer,
                 Col::ACCENT.r, Col::ACCENT.g, Col::ACCENT.b, 180);
@@ -2846,8 +3001,8 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
             SDL_RenderFillRect(m_renderer, &selBar);
         }
 
-        // 구분선: 무기(1-2) / 소모품(3-5) 사이
-        if (s == 2) {
+        // 구분선: 주무기(1) / 소모품(2-5) 사이
+        if (s == 1) {
             SDL_SetRenderDrawColor(m_renderer, 50,60,80,200);
             SDL_RenderDrawLine(m_renderer, sx-GAP/2, hbY+4, sx-GAP/2, hbY+SLOT_H-4);
         }
@@ -2879,8 +3034,7 @@ void Renderer::drawHotbar(const ClientInventory& inv, int selectedSlot,
             // 한국어 이름 (짧게)
             const char* dispName = getDisplayName(slotItem->name);
             std::string disp(dispName);
-            // UTF-8 한글은 3바이트/자 → 4자 = 12바이트로 제한
-            if (disp.size() > 12) disp = disp.substr(0, 12);
+            if (disp.size() > 12) disp = utf8Prefix(disp, 4);
             drawText(disp, sx+SLOT_W/2, hbY+42, Col::TEXT_HI, m_fonts.get(11), true);
 
             // 소모품 수량 배지
@@ -3136,28 +3290,49 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
     const int MM  = 160;
     const int MMX = m_screenW - MM - 14;
     const int MMY = 14;
-    const float MW = map.width() * 32.0f;
-    const float MH = map.height() * 32.0f;
 
-    // 외곽 테두리 + 배경
+    // 레이더 범위: 플레이어 중심 40타일 반경
+    const float RADAR_RANGE = 40.0f * 32.0f;  // 1280 world pixels
+
+    // 외곽 패널
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
     drawPanel(MMX - 2, MMY - 2, MM + 4, MM + 32, {6, 8, 14, 230}, {60, 70, 100, 200}, 2);
 
-    for (const auto& z : map.getDistricts()) {
-        SDL_Color col = districtColor(z.theme, 45);
-        SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
-        SDL_Rect r = {
-            MMX + static_cast<int>((z.x * TILE_SIZE / MW) * MM),
-            MMY + static_cast<int>((z.y * TILE_SIZE / MH) * MM),
-            static_cast<int>((z.w * TILE_SIZE / MW) * MM),
-            static_cast<int>((z.h * TILE_SIZE / MH) * MM)
-        };
-        SDL_RenderFillRect(m_renderer, &r);
-        if (r.w >= 42 && r.h >= 28) {
-            drawText(z.label.empty() ? z.key : z.label,
-                     r.x + r.w / 2, r.y + r.h / 2 - 5,
-                     {230, 230, 220, 170}, m_fonts.get(10), true);
+    // 미니맵 영역 클리핑 (이 안에서만 그려짐)
+    SDL_Rect clipRect = {MMX, MMY, MM, MM};
+    SDL_RenderSetClipRect(m_renderer, &clipRect);
+
+    // 배경
+    SDL_SetRenderDrawColor(m_renderer, 15, 20, 25, 255);
+    SDL_RenderFillRect(m_renderer, &clipRect);
+
+    // world → 레이더 화면 좌표 변환 (플레이어가 항상 중앙)
+    auto toMM = [&](float wx, float wy, int& px, int& py) {
+        px = MMX + MM/2 + static_cast<int>((wx - lx) / RADAR_RANGE * (MM/2));
+        py = MMY + MM/2 + static_cast<int>((wy - ly) / RADAR_RANGE * (MM/2));
+    };
+
+    // 건물 표시
+    for (const auto& b : map.getBuildings()) {
+        float bx = b.x * 32.0f, by_w = b.y * 32.0f;
+        float bw = b.w * 32.0f, bh = b.h * 32.0f;
+        int sx, sy, ex, ey;
+        toMM(bx, by_w, sx, sy);
+        toMM(bx + bw, by_w + bh, ex, ey);
+        int rw = ex - sx, rh = ey - sy;
+        if (rw <= 0) rw = 1;
+        if (rh <= 0) rh = 1;
+        SDL_Color col;
+        switch(b.theme) {
+            case 0: col = {160, 130, 90, 200}; break;
+            case 1: col = {90, 110, 160, 200}; break;
+            case 2: col = {80, 85, 80, 200};   break;
+            case 3: col = {70, 90, 55, 200};   break;
+            default: col = {100, 100, 100, 200}; break;
         }
+        SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
+        SDL_Rect br = {sx, sy, rw, rh};
+        SDL_RenderFillRect(m_renderer, &br);
     }
 
     // 그리드 라인
@@ -3169,27 +3344,23 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
         SDL_RenderDrawLine(m_renderer, MMX, gy, MMX + MM, gy);
     }
 
-    auto toMM = [&](float wx, float wy, int& px, int& py) {
-        px = MMX + static_cast<int>((wx / MW) * MM);
-        py = MMY + static_cast<int>((wy / MH) * MM);
-    };
-
-    // 탈출 구역 (pulsing)
+    // 탈출 구역
     float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() * 0.004f);
     uint8_t extA = static_cast<uint8_t>(120 + 100 * pulse);
     for (const auto& z : zones) {
         int epx, epy;
         toMM(z.first, z.second, epx, epy);
-        drawFilledCircle(epx, epy, 6, {50, 220, 50, static_cast<uint8_t>(60 + 40 * pulse)});
+        drawFilledCircle(epx, epy, 5, {50, 220, 50, static_cast<uint8_t>(60 + 40 * pulse)});
         SDL_SetRenderDrawColor(m_renderer, 50, 220, 50, extA);
-        for (int a = 0; a < 360; a += 15) {
-            float rad = a * 3.14159f / 180.f;
-            SDL_RenderDrawPoint(m_renderer, epx + static_cast<int>(std::cos(rad) * 6),
-                                            epy + static_cast<int>(std::sin(rad) * 6));
+        for (int a = 0; a < 360; a += 20) {
+            float rad = a * 3.14159f / 180.0f;
+            SDL_RenderDrawPoint(m_renderer,
+                epx + static_cast<int>(std::cos(rad) * 5),
+                epy + static_cast<int>(std::sin(rad) * 5));
         }
     }
 
-    // 원격 엔티티들 (좀비 / 플레이어)
+    // 원격 엔티티 (좀비/플레이어)
     for (int i = 0; i < net.remoteCount(); ++i) {
         const auto& r = net.remotes()[i];
         if (r.snap[1].statusFlags & STATUS_DEAD) continue;
@@ -3201,25 +3372,28 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
             SDL_Rect dot = {px - 1, py - 1, 3, 3};
             SDL_RenderFillRect(m_renderer, &dot);
         } else {
-            // 다른 플레이어 — 주황색 점 (팀 기능 완벽 지원 전까지는 모두 적으로 표시)
             drawFilledCircle(px, py, 3, {255, 120, 30, 220});
         }
     }
 
-    // 로컬 플레이어 (흰 점 + 팀 테두리)
-    int lpx, lpy;
-    toMM(lx, ly, lpx, lpy);
+    // 로컬 플레이어 (항상 중앙)
+    int lpx = MMX + MM / 2;
+    int lpy = MMY + MM / 2;
     SDL_Color tc = Col::TEAM[std::max(0, std::min(4, teamID))];
     drawFilledCircle(lpx, lpy, 5, tc);
     drawFilledCircle(lpx, lpy, 3, {255, 255, 255, 255});
 
-    // 미니맵 테두리 재그리기 (엔티티가 경계 넘지 않게)
-    SDL_SetRenderDrawColor(m_renderer, 60, 70, 100, 200);
+    // 클리핑 해제
+    SDL_RenderSetClipRect(m_renderer, nullptr);
+
+    // 테두리 (클리핑 해제 후)
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(m_renderer, 60, 70, 100, 255);
     SDL_Rect border = {MMX, MMY, MM, MM};
     SDL_RenderDrawRect(m_renderer, &border);
 
-    // 하단 레이블
-    drawText("MAP  [M] 전체 지도", MMX + MM / 2, MMY + MM + 4, {140, 150, 180, 200}, m_fonts.get(10), true);
+    // 레이블
+    drawText("RADAR [M]", MMX + MM / 2, MMY + MM + 4, {140, 150, 180, 200}, m_fonts.get(10), true);
 }
 
 void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float lx, float ly, int teamID, const std::vector<std::pair<float,float>>& zones) {
@@ -3763,6 +3937,26 @@ void Renderer::spawnMeleeArc(float x, float y, float angle) {
     }
 }
 
+void Renderer::spawnThrownMolotov(float fromX, float fromY, float toX, float toY) {
+    const float dx = toX - fromX;
+    const float dy = toY - fromY;
+    const float dist = std::sqrt(dx * dx + dy * dy);
+    const int steps = std::max(6, std::min(22, static_cast<int>(dist / 16.0f)));
+    for (int i = 0; i <= steps; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(steps);
+        Particle p;
+        p.x = fromX + dx * t;
+        p.y = fromY + dy * t - std::sin(t * 3.14159265f) * 34.0f;
+        p.vx = (dx / std::max(1.0f, dist)) * (80.0f + static_cast<float>(rand() % 40));
+        p.vy = -20.0f + static_cast<float>(rand() % 40);
+        p.life = p.maxLife = 0.18f + t * 0.28f;
+        p.color = (i == steps) ? SDL_Color{255, 80, 20, 240}
+                               : SDL_Color{255, 180, 60, 210};
+        p.size = (i == steps) ? 7.0f : 3.0f + t * 3.0f;
+        m_particles.push_back(p);
+    }
+}
+
 void Renderer::spawnBloodStain(float x, float y) {
     if (m_bloodStains.size() > 500) {
         m_bloodStains.erase(m_bloodStains.begin()); // FIFO 500개 유지
@@ -3786,6 +3980,93 @@ void Renderer::spawnHealEffect(float x, float y) {
         p.size = static_cast<float>(rand() % 3 + 4);
         p.type = 1; // 힐링 십자가
         m_particles.push_back(p);
+    }
+}
+
+void Renderer::spawnFlameEffect(float x, float y, float angle) {
+    constexpr float PI = 3.14159265f;
+    float rad = angle * PI / 180.0f;
+    float fwdX = std::sin(rad), fwdY = -std::cos(rad);
+
+    for (int i = 0; i < 18; ++i) {
+        Particle p;
+        float spread = angle + static_cast<float>(rand() % 60 - 30);
+        float sr = spread * PI / 180.0f;
+        float dist = 20.0f + static_cast<float>(rand() % 120);
+        p.x = x + std::sin(sr) * dist;
+        p.y = y - std::cos(sr) * dist;
+        float speed = 80.0f + static_cast<float>(rand() % 120);
+        p.vx = std::sin(sr) * speed;
+        p.vy = -std::cos(sr) * speed;
+        p.life = p.maxLife = 0.08f + static_cast<float>(rand() % 15) / 100.0f;
+        // 오렌지→노란색 랜덤
+        int variant = rand() % 3;
+        if (variant == 0)      p.color = {255, 80,  20, 230};
+        else if (variant == 1) p.color = {255, 150, 30, 220};
+        else                   p.color = {255, 220, 60, 200};
+        p.size = 3.0f + static_cast<float>(rand() % 5);
+        m_particles.push_back(p);
+    }
+    // 연기 파티클
+    for (int i = 0; i < 5; ++i) {
+        Particle p;
+        float spread = angle + static_cast<float>(rand() % 40 - 20);
+        float sr = spread * PI / 180.0f;
+        float dist = 60.0f + static_cast<float>(rand() % 80);
+        p.x = x + std::sin(sr) * dist;
+        p.y = y - std::cos(sr) * dist;
+        p.vx = fwdX * 30.0f + static_cast<float>(rand() % 40 - 20);
+        p.vy = fwdY * 30.0f - static_cast<float>(rand() % 30);
+        p.life = p.maxLife = 0.2f + static_cast<float>(rand() % 20) / 100.0f;
+        p.color = {60, 55, 50, 120};
+        p.size = 5.0f + static_cast<float>(rand() % 6);
+        m_particles.push_back(p);
+    }
+}
+
+void Renderer::spawnSoundRing(float x, float y, float maxRadius, SDL_Color color) {
+    SoundRing r;
+    r.x = x; r.y = y;
+    r.currentRadius = 0.0f;
+    r.maxRadius = maxRadius;
+    r.life = r.maxLife = 0.75f;
+    r.color = color;
+    m_soundRings.push_back(r);
+}
+
+void Renderer::updateSoundRings(float dt) {
+    for (auto it = m_soundRings.begin(); it != m_soundRings.end(); ) {
+        it->life -= dt;
+        if (it->life <= 0.0f) {
+            it = m_soundRings.erase(it);
+        } else {
+            float progress = 1.0f - (it->life / it->maxLife);
+            it->currentRadius = it->maxRadius * progress;
+            ++it;
+        }
+    }
+}
+
+void Renderer::drawSoundRings(const Camera& cam) {
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+    for (const auto& ring : m_soundRings) {
+        float t = ring.life / ring.maxLife; // 1→0 as it expands
+        uint8_t a = static_cast<uint8_t>(ring.color.a * t * t); // quadratic fade
+        if (a == 0) continue;
+        SDL_SetRenderDrawColor(m_renderer, ring.color.r, ring.color.g, ring.color.b, a);
+
+        int cx, cy;
+        cam.worldToScreen(ring.x, ring.y, cx, cy);
+        int r = static_cast<int>(ring.currentRadius * cam.zoom);
+        if (r <= 0) continue;
+
+        // 2도 간격 점으로 원 테두리 그리기
+        for (int deg = 0; deg < 360; deg += 2) {
+            float rad = deg * 3.14159265f / 180.0f;
+            int px = cx + static_cast<int>(std::cos(rad) * r);
+            int py = cy + static_cast<int>(std::sin(rad) * r);
+            SDL_RenderDrawPoint(m_renderer, px, py);
+        }
     }
 }
 

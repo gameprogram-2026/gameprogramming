@@ -36,7 +36,7 @@ enum class ZombieState : uint8_t {
 };
 
 constexpr float ZOMBIE_HEARING_RADIUS   = 384.0f; ///< 12 tiles base hearing range
-constexpr float ZOMBIE_FRENZY_CHAIN_R   = 640.0f; ///< 20 m chain aggro radius
+constexpr float ZOMBIE_FRENZY_CHAIN_R   = 320.0f; ///< 10 m chain aggro radius
 constexpr float ZOMBIE_SIGHT_RADIUS     = 320.0f; ///< 10 tiles line-of-sight range
 constexpr float ZOMBIE_ATTACK_RADIUS    =  20.0f; ///< Melee reach: player/zombie collision boxes must touch
 
@@ -63,8 +63,8 @@ constexpr float BRUTE_ATTACK_RADIUS     =  26.0f; ///< 더 긴 팔, but still vi
 
 constexpr float ZOMBIE_PATROL_INTERVAL  =   4.0f; ///< s per waypoint
 constexpr float ZOMBIE_ALERT_DECAY      =   0.12f;///< alert/s in silence
-constexpr float ZOMBIE_SILENCE_CHASE    =   8.0f; ///< s of silence to drop Chase
-constexpr float ZOMBIE_FRENZY_DURATION  =  30.0f; ///< s Frenzy lasts
+constexpr float ZOMBIE_SILENCE_CHASE    =   5.0f; ///< s of silence to drop Chase
+constexpr float ZOMBIE_FRENZY_DURATION  =  15.0f; ///< s Frenzy lasts
 
 struct ZombieAIComponent {
     ZombieType  type        = ZombieType::Shambler;

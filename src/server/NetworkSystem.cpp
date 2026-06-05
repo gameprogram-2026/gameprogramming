@@ -341,6 +341,13 @@ void NetworkSystem::handlePacket(uint32_t peerIdx,
         if (m_onDismantle) m_onDismantle(peerIdx, pkt.srcType, pkt.srcIdx);
         break;
     }
+    case PacketType::C2S_FireThrow: {
+        if (len < sizeof(FireThrowPacket)) return;
+        FireThrowPacket pkt{};
+        std::memcpy(&pkt, data, sizeof(pkt));
+        if (m_onFireThrow) m_onFireThrow(peerIdx, pkt.targetX, pkt.targetY);
+        break;
+    }
     default:
         DZ_LOG_DEBUG("[Net] Unknown packet 0x%02X from peer %u",
                      static_cast<uint8_t>(type), peerIdx);

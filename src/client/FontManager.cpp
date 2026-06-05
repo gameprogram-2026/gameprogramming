@@ -12,15 +12,20 @@ bool FontManager::init() {
 
     // 한글 지원 폰트 우선 — AppleSDGothicNeo (macOS 내장)
     m_regularPath = findFont({
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/Library/Fonts/Arial Unicode MS.ttf",
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
         "/System/Library/Fonts/SFNS.ttf",
         "/System/Library/Fonts/Geneva.ttf",
-        "/Library/Fonts/Arial Unicode MS.ttf",
         "/Library/Fonts/Arial.ttf",
     });
 
-    // 모노는 한글 지원 폰트 → 수 폴백
+    // 모노도 한글 텍스트가 섞이는 HUD가 있어 한글 지원 폰트를 우선 사용
     m_monoPath = findFont({
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/Library/Fonts/Arial Unicode MS.ttf",
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
         "/System/Library/Fonts/SFNSMono.ttf",
         "/System/Library/Fonts/Monaco.ttf",
