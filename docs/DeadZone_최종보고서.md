@@ -804,7 +804,61 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 - **파티클 및 환경 이펙트**: 총구 화염(Muzzle Flash), 탄피 배출, 피격 시 혈흔, 회복 이펙트에 더해 서버에서 동기화된 화염 타일을 바닥 그래픽으로 렌더링하여 화염병의 착탄 지점과 전파 범위를 시각적으로 확인할 수 있게 했습니다.
 - **화면 연출**: 피격 시 히트 플래시(화면 붉어짐) 및 카메라 쉐이크를 적용했습니다.
 
-### 5.2 UI / UX
+### 5.2 이미지 스프라이트 및 에셋 처리
+본 프로젝트는 단일 이미지 파일을 무작정 개별 로드하는 방식이 아니라, 여러 그래픽을 큰 스프라이트 시트로 묶고 런타임에서 필요한 영역만 잘라 `SDL_Texture`로 캐싱하는 구조를 사용했습니다. 이는 게임 화면에서 반복적으로 그려지는 타일, 아이템, 캐릭터, 소품을 효율적으로 관리하기 위한 작업입니다.
+
+사용한 주요 스프라이트 에셋은 다음과 같습니다.
+- `assets/sprites/items/sheet_items.png`: 근접 무기, 총기, 탄약, 회복 아이템, 건설 재료 아이콘
+- `assets/sprites/items/icon_smg_9mm.png`: SMG 전용 아이콘
+- `assets/sprites/world/sheet_world.png`: 지면 타일, 벽, 식물, 차량 잔해, 설치물, 기본 캐릭터 방향 이미지
+- `assets/sprites/characters/player.png`, `zombie_shambler.png`, `zombie_runner.png`, `zombie_brute.png`: 플레이어와 좀비 3종의 방향별 애니메이션 프레임
+- `assets/sprites/props/sheet_props.png`, `assets/sprites/tiles/sheet_tiles.png`: 프롭과 타일 보조 시트
+
+**[코드 : 스프라이트 시트 캐싱 및 영역 분리 (TextureCache.cpp)]**
+```cpp
+SDL_Texture* TextureCache::getOrLoadSheet(const std::string& path) {
+    auto it = m_sheetCache.find(path);
+    if (it != m_sheetCache.end()) return it->second;
+
+    SDL_Surface* surf = IMG_Load(path.c_str());
+    SDL_Texture* sheet = SDL_CreateTextureFromSurface(m_renderer, surf);
+    SDL_SetTextureBlendMode(sheet, SDL_BLENDMODE_BLEND);
+    m_sheetCache[path] = sheet;
+    return sheet;
+}
+
+bool TextureCache::loadFromRect(const std::string& key,
+                                const std::string& sheetPath,
+                                int srcX, int srcY, int srcW, int srcH) {
+    SDL_Texture* sheet = getOrLoadSheet(sheetPath);
+    SDL_Texture* cell = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_RGBA8888,
+                                          SDL_TEXTUREACCESS_TARGET, srcW, srcH);
+    SDL_SetRenderTarget(m_renderer, cell);
+    SDL_Rect src = {srcX, srcY, srcW, srcH};
+    SDL_Rect dst = {0, 0, srcW, srcH};
+    SDL_RenderCopy(m_renderer, sheet, &src, &dst);
+    m_textures[key] = cell;
+    return true;
+}
+```
+> **구현 설명**: `TextureCache`는 원본 시트를 `m_sheetCache`에 한 번만 올리고, 각 그래픽을 `key` 단위로 잘라 `m_textures`에 저장합니다. 예를 들어 아이템 UI는 `icon_molotov`, `icon_medkit` 같은 키를 조회하고, 월드 렌더링은 `tile_asphalt`, `prop_car_wreck`, `bld_workbench` 같은 키를 조회합니다. 원본 시트를 매 프레임 다시 자르지 않고 초기화 시점에 잘라두기 때문에, 렌더링 루프에서는 단순한 `SDL_RenderCopy`만 수행합니다.
+
+캐릭터 애니메이션은 방향과 프레임 번호를 키 이름에 포함해 처리했습니다. 플레이어와 좀비 시트는 4열 x 5행 구조로 구성되어 있으며, 남/북/동/서/사망 행과 4개 프레임을 잘라 `char_player_S_0`, `char_runner_E_2` 같은 이름으로 등록합니다. 렌더러는 이동 중일 때 `SDL_GetTicks()` 기반으로 프레임을 바꾸고, 정지 중에는 0번 프레임을 사용합니다. 이 방식 덕분에 캐릭터 종류가 늘어나도 파일 경로와 타입 이름만 추가하면 같은 루프에서 애니메이션 키를 생성할 수 있습니다.
+
+**[코드 : 캐릭터 방향/프레임 기반 렌더링 (Renderer.cpp)]**
+```cpp
+static const char* dirs[] = {"S","N","E","W"};
+int frame = charMoving ? (static_cast<int>(SDL_GetTicks()/125) % 3 + 1) : 0;
+std::string key = std::string("char_player_") + dirs[charDir] + "_" + std::to_string(frame);
+SDL_Texture* tex = m_texCache.get(key);
+if (tex) {
+    SDL_Rect dst = {sx-w/2, sy-h+sz/3, w, h};
+    SDL_RenderCopy(m_renderer, tex, nullptr, &dst);
+}
+```
+> **구현 설명**: 스프라이트 작업은 단순히 이미지를 붙이는 것보다 시간이 많이 들어간 부분입니다. 시트의 셀 크기와 실제 좌표를 코드에 맞추고, 아이템 이름과 텍스처 키를 일관되게 관리해야 UI, 핫바, 월드 오브젝트, 캐릭터 애니메이션이 모두 정상적으로 표시됩니다. 또한 아이콘이 없을 때는 색상 박스 폴백을 두어 누락 에셋이 게임 진행 자체를 막지 않도록 했습니다.
+
+### 5.3 UI / UX
 - **인벤토리**: 마우스 드래그 앤 드롭 방식을 지원하여 직관적인 아이템 장착 및 슬롯 이동, 수량 분할 버리기가 가능합니다.
 - **제작 UI**: 건설 모드 진입 시 포탑/바리케이드/제작대 등 조합에 필요한 재료 리스트를 직관적으로 표시합니다.
 
