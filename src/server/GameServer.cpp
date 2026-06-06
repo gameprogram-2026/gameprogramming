@@ -1664,6 +1664,17 @@ void GameServer::sendHpSyncToPeer(uint32_t peerIdx) {
 
 void GameServer::resetRound() {
     DZ_LOG_INFO("[Server] Resetting round...");
+
+    std::unordered_map<uint32_t, LobbyPlayer> preservedLobbyPlayers = m_lobbyPlayers;
+    for (EntityID id : m_world.alive()) {
+        Entity e{id};
+        auto* net = m_world.tryGet<NetworkComponent>(e);
+        auto* inv = m_world.tryGet<InventoryComponent>(e);
+        if (!net || net->role != NetRole::LocallyOwned || !inv) continue;
+        if (net->ownerID >= MAX_CLIENTS || m_peerUsernames[net->ownerID].empty()) continue;
+
+        preservedLobbyPlayers[net->ownerID] = {m_peerUsernames[net->ownerID], *inv};
+    }
     
     // 1. 살아있는 모든 엔티티 파괴 (플레이어, 루트박스, 좀비, 건물 등 모두)
     for (EntityID id : m_world.alive()) {
@@ -1688,14 +1699,27 @@ void GameServer::resetRound() {
     spawnZombies();
     spawnLootBoxes();
     
-    // 5. 연결된 피어만 빈 인벤토리로 재등록 (접속 유지 + 재접속 가능)
+    // 5. 연결된 피어만 보존된 인벤토리로 재등록 (접속 유지 + 재접속 가능)
     {
         std::unordered_map<uint32_t, LobbyPlayer> fresh;
         for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
-            if (m_net.isConnected(pi) && !m_peerUsernames[pi].empty())
-                fresh[pi] = { m_peerUsernames[pi], InventoryComponent{} };
+            if (!m_net.isConnected(pi) || m_peerUsernames[pi].empty()) continue;
+
+            auto it = preservedLobbyPlayers.find(pi);
+            if (it != preservedLobbyPlayers.end()) {
+                fresh[pi] = it->second;
+                fresh[pi].username = m_peerUsernames[pi];
+            } else {
+                fresh[pi] = {m_peerUsernames[pi], InventoryComponent{}};
+            }
         }
         m_lobbyPlayers = std::move(fresh);
+
+        for (const auto& [peerIdx, player] : m_lobbyPlayers) {
+            (void)player;
+            sendInventorySyncToPeer(peerIdx);
+            sendStashSyncToPeer(peerIdx);
+        }
     }
 }
 
