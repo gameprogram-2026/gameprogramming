@@ -1391,16 +1391,6 @@ void Game::processEvents() {
     if (curF && !m_prevF) tryInteract();
     m_prevF = curF;
 
-    static bool prevT = false;
-    bool curT = m_input.isKeyDown(SDL_SCANCODE_T);
-    if (curT && !prevT) {
-        int target = (m_net.localTeam() % 4) + 1;
-        m_net.sendAlliancePropose(static_cast<uint8_t>(target));
-        char buf[64]; std::snprintf(buf, sizeof(buf), "팀 %d 에게 연합 제안!", target);
-        m_notifyMsg = buf; m_notifyTimer = 2.5f;
-    }
-    prevT = curT;
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1844,7 +1834,7 @@ void Game::renderIngame() {
                        extractProg, teamID,
                        m_extractCountdown, teamNames[tidx],
                        wName, wGrade,
-                       teamAlive, m_net.allianceBits(), m_net.gameTime(), m_net.localReloading());
+                       teamAlive, m_net.gameTime(), m_net.localReloading());
 
     // ── HUD 및 미니맵 ────────────────────────────────────────────────────────
     m_renderer.drawMinimap(m_map, m_net, m_net.localX(), m_net.localY(), teamID, m_extractionZones);

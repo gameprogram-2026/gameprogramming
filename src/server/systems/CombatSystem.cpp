@@ -278,8 +278,7 @@ bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
 // applyDamage — central damage application (enforces FF rules, broadcasts)
 // ─────────────────────────────────────────────────────────────────────────────
 DamageResult CombatSystem::applyDamage(World& world, Entity victim, Entity attacker,
-                                        float rawDamage, DamageType type,
-                                        const uint8_t* allianceMatrix) {
+                                        float rawDamage, DamageType type) {
     DamageResult res{};
     res.type = type;
 

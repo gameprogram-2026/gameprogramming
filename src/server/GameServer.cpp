@@ -21,11 +21,12 @@ namespace {
 constexpr int DAY_ZOMBIE_TARGET = 60;
 constexpr int NIGHT_ZOMBIE_TARGET = 85;
 constexpr int MAX_ZOMBIE_SPAWN_BATCH = 18;
-constexpr int NIGHT_WAVE_BASE = 8;
-constexpr int NIGHT_WAVE_PER_PLAYER = 3;
+constexpr int NIGHT_WAVE_BASE = 6;
+constexpr int NIGHT_WAVE_PER_PLAYER = 2;
 constexpr float ZOMBIE_PLAYER_SAFE_RADIUS = 960.0f;
-constexpr float NIGHT_WAVE_MIN_SPAWN_DIST = 1100.0f;
-constexpr float NIGHT_WAVE_EXTRA_SPAWN_DIST = 450.0f;
+constexpr float NIGHT_WAVE_MIN_SPAWN_DIST = 1400.0f;
+constexpr float NIGHT_WAVE_EXTRA_SPAWN_DIST = 650.0f;
+constexpr float NIGHT_WAVE_ATTACK_GRACE = 4.0f;
 
 uint32_t itemIDForKey(const char* key) {
     if (std::strcmp(key, "scrap_pipe") == 0)      return 1;
@@ -59,14 +60,6 @@ int countLivingZombies(World& world) {
     return count;
 }
 
-bool offlineAuthEnabled() {
-    const char* value = std::getenv("DEADZONE_OFFLINE_AUTH");
-    return value &&
-           (std::strcmp(value, "1") == 0 ||
-            std::strcmp(value, "true") == 0 ||
-            std::strcmp(value, "TRUE") == 0);
-}
-
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,7 +76,6 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
     m_net.onSelectWeapon   ([this](uint32_t i, uint8_t slot)         { onSelectWeaponReq(i, slot); });
     m_net.onDoorToggle     ([this](uint32_t i, uint16_t doorID)      { onDoorToggleReq(i, doorID); });
     m_net.onUseItem        ([this](uint32_t i, const char* k)        { onUseItem(i, k); });
-    m_net.onAlliancePropose([this](uint32_t i, uint8_t toTeam)       { onAllianceProposeReq(i, toTeam); });
     m_net.onBuildPlace     ([this](uint32_t i, int16_t tx, int16_t ty, uint8_t bt, uint8_t dir){ onBuildPlace(i,tx,ty,bt,dir); });
     m_net.onCraft          ([this](uint32_t i, uint8_t recipeID)     { onCraftRequest(i, recipeID); });
     m_net.onLootPickup     ([this](uint32_t i, uint32_t nid)         { onLootPickupReq(i, nid); });
@@ -103,24 +95,12 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
             dbUser ? dbUser : "root",
             dbPass ? dbPass : "",
             dbName ? dbName : "deadzone")) {
-        DZ_LOG_ERROR("[Server] DB connection failed — auth disabled. Set DEADZONE_DB_* env vars or DEADZONE_OFFLINE_AUTH=1 for local testing.");
+        DZ_LOG_ERROR("[Server] DB connection failed — auth disabled. Run scripts/setup_database.sh or set DEADZONE_DB_* env vars.");
     }
 
-    // Combat callbacks — 하나의 핸들러에서 HP 이벤트 + 배신 감지 모두 처리
+    // Combat callbacks
     m_combat.onDamage([this](const DamageResult& r) {
-        onDamage(r);  // HP 브로드캐스트
-        if (r.betrayal) {
-            uint8_t teamA = 0, teamB = 0;
-            for (EntityID id : m_world.alive()) {
-                Entity e{id};
-                auto* net = m_world.tryGet<NetworkComponent>(e);
-                auto* hp  = m_world.tryGet<HealthComponent>(e);
-                if (!net || !hp) continue;
-                if (net->netID == r.attackerID) teamA = static_cast<uint8_t>(hp->team);
-                if (net->netID == r.victimID)   teamB = static_cast<uint8_t>(hp->team);
-            }
-            if (teamA && teamB) m_alliance.handleBetrayal(teamA, teamB);
-        }
+        onDamage(r);
     });
     m_combat.onDeath  ([this](Entity v, Entity k, DamageType t) { onDeath(v, k, t); });
 
@@ -130,11 +110,6 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
 
     // Fire destroys buildings
     m_fire.onDestroyBuilding([this](uint32_t id, bool expl){ onBuildingDestroyed(id, expl); });
-
-    // Alliance broadcast
-    m_alliance.onBroadcast([this](uint8_t a, uint8_t b, bool active){
-        onAllianceChanged(a, b, active);
-    });
 
     // 포탑 발사 → 클라이언트 레이저 빔 시각화용 브로드캐스트
     m_build.onTurretFire([this](uint16_t turretNetID,
@@ -165,7 +140,7 @@ GameServer::GameServer(uint16_t port) : m_port(port) {
 
     // GameLogic은 모든 시스템 초기화 후 마지막에 생성
     m_logic = std::make_unique<GameLogic>(
-        m_world, m_map, m_build, m_alliance, m_combat, m_fire);
+        m_world, m_map, m_build, m_combat, m_fire);
 
     m_logic->onRangedFire([this](uint16_t shooterID, float fromX, float fromY, float toX, float toY, uint8_t team) {
         TurretFirePacket pkt{};
@@ -320,7 +295,7 @@ void GameServer::tick(float dt) {
                 // 건물 내부 좀비는 살려둠
                 if (!inBuilding) {
                     // CombatSystem을 통해 applyDamage → onDeath 콜백 정상 발동
-                    m_combat.applyDamage(m_world, e, Entity{}, 20.0f * dt, DamageType::Fire, nullptr);
+                    m_combat.applyDamage(m_world, e, Entity{}, 20.0f * dt, DamageType::Fire);
                 }
             }
         }
@@ -399,10 +374,7 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     AuthAckPacket ack{};
     ack.packetType = static_cast<uint8_t>(PacketType::S2C_AuthAck);
 
-    const bool dbConnected = m_db.isConnected();
-    const bool allowOfflineAuth = !dbConnected && offlineAuthEnabled();
-
-    if (!dbConnected && !allowOfflineAuth) {
+    if (!m_db.isConnected()) {
         ack.success = 0;
         std::strncpy(ack.message, "DB offline. Login disabled.", sizeof(ack.message));
         m_net.sendReliable(peerIdx, &ack, sizeof(ack));
@@ -411,11 +383,9 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     }
     
     if (isRegister) {
-        if (allowOfflineAuth || m_db.registerAccount(username, password)) {
+        if (m_db.registerAccount(username, password)) {
             ack.success = 1;
-            std::strncpy(ack.message,
-                         allowOfflineAuth ? "Offline auth enabled. Account not saved." : "Registration successful!",
-                         sizeof(ack.message));
+            std::strncpy(ack.message, "Registration successful!", sizeof(ack.message));
             m_net.sendReliable(peerIdx, &ack, sizeof(ack));
         } else {
             ack.success = 0;
@@ -443,16 +413,11 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     }
 
     InventoryComponent loadedInv;
-    if (dbConnected) {
-        if (!m_db.loginAccount(username, password, loadedInv)) {
-            ack.success = 0;
-            std::strncpy(ack.message, "Login failed. Check credentials.", sizeof(ack.message));
-            m_net.sendReliable(peerIdx, &ack, sizeof(ack));
-            return;
-        }
-    } else {
-        // Explicit local-test escape hatch only.
-        DZ_LOG_WARN("[Server] DEADZONE_OFFLINE_AUTH=1 — accepting '%s' without DB verification", username);
+    if (!m_db.loginAccount(username, password, loadedInv)) {
+        ack.success = 0;
+        std::strncpy(ack.message, "Login failed. Check credentials.", sizeof(ack.message));
+        m_net.sendReliable(peerIdx, &ack, sizeof(ack));
+        return;
     }
     
     ack.success = 1;
@@ -885,12 +850,10 @@ void GameServer::onDeath(Entity victim, Entity killer, DamageType type) {
 }
 
 void GameServer::onExtracted(Entity player, uint8_t zoneID) {
-    ExtractionPacket pkt{};
-    pkt.packetType = static_cast<uint8_t>(PacketType::S2C_ExtractionResult);
+    ExtractionResultPacket pkt{};
     auto* net = m_world.tryGet<NetworkComponent>(player);
     if (net) pkt.playerID = static_cast<uint16_t>(net->netID);
     pkt.zoneID      = zoneID;
-    pkt.channelTime = 0.0f;
     m_net.broadcastReliable(&pkt, sizeof(pkt));
 
     // 탈출 성공 → 인벤토리 저장 + 통계 기록
@@ -1217,16 +1180,6 @@ void GameServer::updateZombieDoorAttacks(float dt) {
     }
 }
 
-void GameServer::onAllianceChanged(uint8_t teamA, uint8_t teamB, bool active) {
-    AlliancePacket pkt{};
-    pkt.packetType = static_cast<uint8_t>(
-        active ? PacketType::S2C_AllianceAck : PacketType::S2C_AllianceAck);
-    pkt.teamA  = teamA;
-    pkt.teamB  = teamB;
-    pkt.active = active ? 1 : 0;
-    m_net.broadcastReliable(&pkt, sizeof(pkt));
-}
-
 bool GameServer::loadMap(const std::string& path) {
     if (!m_map.loadFromJSON(path)) {
         DZ_LOG_WARN("[Server] Using default 80x80 map");
@@ -1439,25 +1392,6 @@ void GameServer::onUseItem(uint32_t peerIdx, const char* key) {
     if (m_logic) m_logic->handleUseItem(peerIdx, key);
     sendInventorySyncToPeer(peerIdx);
     sendHpSyncToPeer(peerIdx);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// onAllianceProposeReq — 연합 제안 처리
-// ─────────────────────────────────────────────────────────────────────────────
-void GameServer::onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam) {
-    // fromTeam = 이 피어가 조종하는 플레이어의 팀
-    uint8_t fromTeam = 0;
-    for (EntityID id : m_world.alive()) {
-        Entity e{id};
-        auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
-            auto* hp = m_world.tryGet<HealthComponent>(e);
-            if (hp) fromTeam = static_cast<uint8_t>(hp->team);
-            break;
-        }
-    }
-    if (fromTeam == 0 || fromTeam == toTeam) return;
-    if (m_logic) m_logic->handleAlliancePropose(fromTeam, toTeam);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1724,18 +1658,10 @@ void GameServer::resetRound() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// broadcastTeamStatus — 팀별 생존 수 + 연합 비트 전송
+// broadcastTeamStatus — 팀별 생존 수 전송
 // ─────────────────────────────────────────────────────────────────────────────
 void GameServer::broadcastTeamStatus() {
-    // 연합 비트: 비트0=(1,2), 비트1=(1,3), 비트2=(1,4), 비트3=(2,3), 비트4=(2,4), 비트5=(3,4)
-    static const int pairA[] = {1,1,1,2,2,3};
-    static const int pairB[] = {2,3,4,3,4,4};
-    uint8_t allianceBits = 0;
-    for (int k = 0; k < 6; ++k)
-        if (m_alliance.isAllied(pairA[k], pairB[k]))
-            allianceBits |= (1 << k);
-
-    m_net.broadcastTeamStatus(m_world, allianceBits, static_cast<uint16_t>(m_gameTime));
+    m_net.broadcastTeamStatus(m_world, static_cast<uint16_t>(m_gameTime));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1752,16 +1678,30 @@ void GameServer::spawnNightWave() {
     }
     int spawned = 0;
     
-    // 현재 살아있는 플레이어 수집
+    // 현재 살아있는 플레이어만 수집한다. 죽은 엔티티나 로비 엔티티를 웨이브 타겟으로 잡으면
+    // 스폰 위치가 실제 생존자 바로 옆으로 튈 수 있다.
     std::vector<Entity> players;
     for (EntityID id : m_world.alive()) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
-        if (net && net->role == NetRole::LocallyOwned) {
-            players.push_back(e);
-        }
+        if (!net || net->role != NetRole::LocallyOwned) continue;
+        auto* hp = m_world.tryGet<HealthComponent>(e);
+        auto* xf = m_world.tryGet<TransformComponent>(e);
+        if (!hp || !hp->isAlive || !xf) continue;
+        players.push_back(e);
     }
     if (players.empty()) return;
+
+    auto tooCloseToAnyPlayer = [&](float x, float y, float minDist2) {
+        for (Entity player : players) {
+            auto* pxf = m_world.tryGet<TransformComponent>(player);
+            if (!pxf) continue;
+            const float dx = x - pxf->x;
+            const float dy = y - pxf->y;
+            if (dx * dx + dy * dy < minDist2) return true;
+        }
+        return false;
+    };
 
     for (int i = 0; i < waveSize; ++i) {
         // 랜덤 플레이어 한 명을 골라서 그 주변에 스폰
@@ -1776,16 +1716,14 @@ void GameServer::spawnNightWave() {
         const float mapMaxY = TileMap::tileCentre(std::max(0, m_map.height() - 1));
         const float minDist2 = NIGHT_WAVE_MIN_SPAWN_DIST * NIGHT_WAVE_MIN_SPAWN_DIST;
 
-        for (int attempts = 0; attempts < 24; ++attempts) {
+        for (int attempts = 0; attempts < 40; ++attempts) {
             float angle = static_cast<float>(std::rand() % 360) * 3.14159f / 180.0f;
             float dist  = NIGHT_WAVE_MIN_SPAWN_DIST +
                           static_cast<float>(std::rand() % static_cast<int>(NIGHT_WAVE_EXTRA_SPAWN_DIST));
             sx = std::max(32.0f, std::min(txf->x + std::cos(angle) * dist, mapMaxX));
             sy = std::max(32.0f, std::min(txf->y + std::sin(angle) * dist, mapMaxY));
 
-            float dx = sx - txf->x;
-            float dy = sy - txf->y;
-            if (dx * dx + dy * dy < minDist2) continue;
+            if (tooCloseToAnyPlayer(sx, sy, minDist2)) continue;
             if (m_map.isSolid(TileMap::worldToTile(sx), TileMap::worldToTile(sy))) continue;
 
             foundSpawn = true;
@@ -1806,10 +1744,17 @@ void GameServer::spawnNightWave() {
         hp.isAlive = true;
 
         auto& ai = m_world.addComponent<ZombieAIComponent>(z);
-        ai.state = ZombieState::Frenzy; // 태어나자마자 무조건 광분 추격
+        ai.state = ZombieState::Chase;
         ai.targetX = txf->x;
         ai.targetY = txf->y;
-        ai.type  = (std::rand() % 10 == 0) ? ZombieType::Brute : ZombieType::Runner; // 밤에는 빠른 놈들과 강력한 놈들 위주
+        if (auto* targetNet = m_world.tryGet<NetworkComponent>(target)) {
+            ai.targetNetID = targetNet->netID;
+        }
+        ai.attackTimer = NIGHT_WAVE_ATTACK_GRACE;
+        int roll = std::rand() % 10;
+        ai.type = (roll == 0) ? ZombieType::Brute
+                : (roll < 5)  ? ZombieType::Runner
+                :               ZombieType::Shambler;
         
         auto& net = m_world.addComponent<NetworkComponent>(z);
         net.netID = m_nextPlayerNetID++;

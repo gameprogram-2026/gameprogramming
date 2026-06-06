@@ -283,16 +283,7 @@ void NetworkClient::update(float dt) {
                         TeamStatusPacket ts{};
                         std::memcpy(&ts, ev.packet->data, sizeof(ts));
                         for (int k = 0; k < 4; ++k) m_teamAlive[k] = ts.aliveCount[k];
-                        m_allianceBits = ts.allianceBits;
                         m_gameTimeSec  = ts.gameTimeSec;
-                    }
-                } else if (ptype == PacketType::S2C_AllianceAck) {
-                    if (ev.packet->dataLength >= sizeof(AlliancePacket)) {
-                        AlliancePacket ap{};
-                        std::memcpy(&ap, ev.packet->data, sizeof(ap));
-                        // 연합 상태는 TeamStatus로도 전달됨 — 여기선 로그만
-                        DZ_LOG_INFO("[Client] Alliance %u↔%u: %s",
-                            ap.teamA, ap.teamB, ap.active ? "FORMED" : "BROKEN");
                     }
                 } else if (ptype == PacketType::S2C_DeathEvent) {
                     if (ev.packet->dataLength >= sizeof(DeathEventPacket)) {
@@ -331,8 +322,8 @@ void NetworkClient::update(float dt) {
                         m_extractProg = upd.progress;
                     }
                 } else if (ptype == PacketType::S2C_ExtractionResult) {
-                    if (ev.packet->dataLength >= sizeof(ExtractionPacket)) {
-                        ExtractionPacket pkt{};
+                    if (ev.packet->dataLength >= sizeof(ExtractionResultPacket)) {
+                        ExtractionResultPacket pkt{};
                         std::memcpy(&pkt, ev.packet->data, sizeof(pkt));
                         if (pkt.playerID == m_localNetID) {
                             m_hasExtractionEvent = true;
@@ -671,15 +662,6 @@ void NetworkClient::sendFireThrow(float targetX, float targetY) {
     pkt.targetX    = targetX;
     pkt.targetY    = targetY;
     ENetPacket* ep = enet_packet_create(&pkt, sizeof(pkt), ENET_PACKET_FLAG_RELIABLE);
-    enet_peer_send(m_peer, CHAN_RELIABLE, ep);
-}
-
-// sendAlliancePropose — 연합 제안 (신뢰 채널)
-// ─────────────────────────────────────────────────────────────────────────────
-void NetworkClient::sendAlliancePropose(uint8_t toTeam) {
-    if (!m_peer) return;
-    uint8_t buf[2] = { static_cast<uint8_t>(PacketType::C2S_AlliancePropose), toTeam };
-    ENetPacket* ep = enet_packet_create(buf, 2, ENET_PACKET_FLAG_RELIABLE);
     enet_peer_send(m_peer, CHAN_RELIABLE, ep);
 }
 

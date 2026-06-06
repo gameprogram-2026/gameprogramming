@@ -1,6 +1,13 @@
 #!/bin/bash
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# DB 준비는 서버를 백그라운드로 띄우기 전에 먼저 처리한다.
+# 그래야 MySQL 관리자 비밀번호 입력 프롬프트가 터미널에 정상 표시된다.
+if [ ! -f "$ROOT_DIR/.env.server" ]; then
+    echo "DB 설정 파일이 없습니다. 로컬 DB와 테스트 계정을 먼저 생성합니다."
+    bash "$ROOT_DIR/scripts/setup_database.sh" || exit 1
+fi
+
 # 기존 서버 종료
 if lsof -i :7777 -t >/dev/null 2>&1; then
     echo "기존 서버 종료 중..."

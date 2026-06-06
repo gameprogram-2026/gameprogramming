@@ -5,6 +5,13 @@
 
 ---
 
+## 프로젝트 요약
+DeadZone은 C++17과 SDL2, ENet, MySQL을 사용해 구현한 탑다운 좀비 서바이벌 멀티플레이어 게임입니다. 단순한 싱글 플레이 데모가 아니라, 서버가 권한을 가지고 월드 상태를 판정하는 구조로 설계했습니다. 플레이어는 4개 팀으로 나뉘어 폐허 도시를 탐색하고, 루트박스를 파밍하며, 소음에 반응하는 좀비를 피해 방어선을 구축하고 탈출존으로 탈출해야 합니다.
+
+구현의 핵심은 **게임 프로그래밍에서 필요한 실시간 시뮬레이션, 네트워크 동기화, 충돌 판정, AI 상태 전이, 타일 기반 월드 상호작용**을 직접 설계했다는 점입니다. ECS 기반 월드 구조, 서버 권한 전투 판정, 클라이언트 예측과 보정, Raycast/OBB/AABB 충돌, 소음 기반 좀비 AI, BFS 화염 전파, MySQL 영속화를 주요 기술 요소로 삼았습니다.
+
+---
+
 ## 1장. 게임 소개
 
 ### 1.1 개요
@@ -30,7 +37,7 @@
 
 ### 2.2 핵심 메카닉
 1. **노이즈 시스템**: 총격, 발소리, 건설 등 플레이어의 행동마다 고유의 소음 반경(noiseRadius)이 발생하여, 주변 좀비들의 어그로를 끌게 됩니다.
-2. **연합 및 배신 시스템**: 타 팀과 핸드셰이크를 통해 임시 연합을 맺을 수 있으나, 동맹 팀을 공격하면 연합이 깨지는 배신 구조로 긴장감을 부여합니다.
+2. **팀 기반 PvP**: 팀 단위로 스폰되지만 플레이어 직접 공격은 팀킬과 타 팀 교전이 가능하며, 서버가 데미지 판정을 권한 있게 처리합니다.
 3. **건설 시스템**: 수집한 재료(고철, 판자, 전자 부품 등)를 활용하여 바리케이드와 포탑을 설치해 방어선을 구축할 수 있습니다.
 4. **탈출 시스템**: 게임 시작 5분(300초) 후 `map.json`에 지정된 4개의 탈출존이 활성화되며, 해당 구역에서 5초간 채널링(F키)을 유지하면 탈출에 성공합니다.
 5. **자동 포탑 시스템**: 건설한 포탑이 설정된 사격 호(Arc) 범위 내에서 가장 가까운 적을 자동으로 조준하여 사격합니다.
@@ -42,17 +49,38 @@
 > **[그림 2]** 아이템 및 무기 등급 체계 표
 > *(최종 PDF 편집 단계에서 아이템 기획안 등급 표 삽입)*
 
+### 2.4 주요 구현 기능 요약
+| 구분 | 구현 내용 | 게임 프로그래밍 관점 |
+|---|---|---|
+| 서버 구조 | C++17 기반 자체 ECS, 서버 권한 월드 시뮬레이션 | 엔티티와 데이터를 분리하여 많은 오브젝트를 매 틱 일관되게 처리 |
+| 멀티플레이 | ENet UDP, 입력 패킷, 월드 스냅샷, 신뢰/비신뢰 채널 분리 | 좌표처럼 최신성이 중요한 데이터와 인벤토리/데미지처럼 손실되면 안 되는 이벤트를 분리 |
+| 이동/충돌 | 타일맵 AABB 충돌, 축 분리 슬라이딩, 넉백 감쇠 | 상용 물리 엔진 없이 탑다운 게임에 필요한 충돌만 직접 구현 |
+| 좀비 AI | FSM, 시야 Raycast, 소음 이벤트, 밤 웨이브 | 거리, 시야, 소리, 시간대를 조합하여 플레이어 행동에 반응하는 AI 구성 |
+| 전투 | 총기 Hitscan Raycast, 근접 OBB 판정, 출혈/화염 지속 피해 | 투사체/피격/상태이상을 서버에서 판정하여 클라이언트 단독 조작을 억제 |
+| 월드 상호작용 | 화염 타일 전파, 문 파괴/수리, 건설, 포탑 | 맵 타일과 엔티티 시스템을 연결하여 플레이어 행동이 지형과 방어선에 영향 |
+| UI/UX | 인벤토리 드래그 앤 드롭, 미니맵 구역명, 건설 단축키 안내 | 테스트 플레이 중 필요한 정보가 화면에서 바로 식별되도록 구성 |
+| 영속화 | MySQL 계정, 인벤토리, 스태시 저장 | 라운드 밖 로비 인벤토리와 게임 내 획득물을 DB에 보존 |
+
 ---
 
 ## 3장. 기술 아키텍처
 
 ### 3.1 전체 구조
-클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버가 게임 상태를 권한 있게 관리합니다. MySQL 데이터베이스가 설정된 환경에서는 계정, 인벤토리, 스태시를 영속 저장하고, DB 연결이 없으면 기본적으로 로그인을 차단합니다. 로컬 테스트가 필요한 경우에만 `DEADZONE_OFFLINE_AUTH=1`로 계정 검증 우회를 명시적으로 허용할 수 있습니다.
+클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버가 게임 상태를 권한 있게 관리합니다. MySQL 데이터베이스가 설정된 환경에서는 계정, 인벤토리, 스태시를 영속 저장하고, DB 연결이 없으면 로그인과 회원가입을 차단합니다. 로컬 실행은 `scripts/setup_database.sh` 또는 `run_server.sh`의 자동 준비 과정을 통해 DB, 앱 계정, 테스트 로그인(`test` / `test1234`)을 먼저 생성한 뒤 진행합니다.
 
 > **[그림 3]** Client ↔ ENet UDP ↔ Server ↔ MySQL 통신 흐름도
 > *(최종 PDF 편집 단계에서 통신 흐름도 삽입)*
 
-### 3.2 자체 구현 ECS (Entity Component System)
+### 3.2 구현 방향과 게임 프로그래밍적 사고
+본 프로젝트는 “보이는 화면”보다 서버 시뮬레이션을 우선으로 설계했습니다. 플레이어 이동, 충돌, 공격, 좀비 AI, 루트 획득, 건설, 탈출 성공 여부는 서버가 최종 판정합니다. 클라이언트는 입력을 빠르게 보내고, 받은 월드 스냅샷을 보간·보정하여 보여주는 역할을 맡습니다. 이 구조는 멀티플레이 게임에서 중요한 클라이언트 단독 상태 변조를 줄이고, 상태 일관성과 디버깅 가능성을 높입니다.
+
+게임 프로그래밍 측면에서는 다음 세 가지를 중점으로 구현했습니다.
+
+1. **실시간성**: 서버는 20Hz 고정 틱으로 월드를 갱신하고, 클라이언트는 입력 예측으로 조작 지연을 줄였습니다.
+2. **판정 안정성**: 이동 충돌, 총기 Raycast, 근접 OBB, 시야 Raycast처럼 게임 규칙에 필요한 물리 판정만 직접 구현해 계산량을 통제했습니다.
+3. **플레이 감각**: 좀비는 단순 추적이 아니라 소리, 시야, 출혈, 밤 시간대, 문/바리케이드 상태에 반응하며, 화염병과 건설은 맵 타일과 연결되어 전장이 변화하도록 만들었습니다.
+
+### 3.3 자체 구현 ECS (Entity Component System)
 - `World` 클래스를 중심으로 동작하며, `ComponentPool<T>`를 통해 메모리 연속성을 보장해 캐시 히트율을 높였습니다.
 - Transform, Inventory, Health, Combat, Network, Building, ZombieAI 등 역할별 컴포넌트를 분리하여 유연한 객체 관리가 가능합니다.
 - 지연 파괴(Deferred Destruction)를 도입해 시스템 순회 중 엔티티 삭제 안정성을 확보하고, Dirty Flag는 HP/인벤토리처럼 신뢰 채널로 별도 동기화해야 하는 상태를 선별 전송하는 데 활용했습니다.
@@ -74,13 +102,13 @@ private:
     std::unordered_map<EntityID, uint32_t>  m_index;
 };
 ```
-> **구현 설명**: `ComponentPool`은 `std::vector`를 기반으로 한 연속된 메모리 공간에 컴포넌트를 할당합니다. `m_index`를 통해 Entity ID로 빠른 접근이 가능하며, 컴포넌트 추가/삭제 시 벡터의 끝 요소를 빈 공간으로 스왑(Swap-and-Pop)하여 O(1) 복잡도와 캐시 히트율(Cache Hit Ratio)을 극대화했습니다.
+> **구현 설명**: `ComponentPool`은 `std::vector`를 기반으로 한 연속된 메모리 공간에 컴포넌트를 할당합니다. `m_index`를 통해 Entity ID로 빠른 접근이 가능하며, 컴포넌트 추가/삭제 시 벡터의 끝 요소를 빈 공간으로 스왑(Swap-and-Pop)하여 O(1)에 가까운 삭제와 캐시 친화적인 순회를 의도했습니다.
 
 > **[그림 4]** ECS World/ComponentPool 구조도
 > *(최종 PDF 편집 단계에서 ECS 구조도 다이어그램 삽입)*
 
-### 3.3 네트워크 권한 모델
-- **서버 권한 (Server Authority)**: 모든 중요한 로직과 상태 판정은 서버에서 수행하여 클라이언트 변조(핵)를 방지합니다.
+### 3.4 네트워크 권한 모델
+- **서버 권한 (Server Authority)**: 주요 게임 로직과 상태 판정은 서버에서 수행하여 클라이언트 단독 변조 가능성을 줄입니다.
 - **클라이언트 사이드 예측 및 서버 롤백**: 클라이언트의 조작에 즉각적으로 반응하여 지연 시간(Lag)을 숨기고, 서버의 결과가 다를 경우 롤백(Rollback)하여 보정합니다.
 - **채널 분리**: ENet의 `CHAN_RELIABLE`과 `CHAN_UNRELIABLE`을 분리해 중요한 이벤트와 잦은 상태 업데이트(좌표 등)의 트래픽을 효율적으로 관리했습니다.
 
@@ -116,7 +144,7 @@ struct EntityStateRecord {
 static_assert(sizeof(EntityStateRecord) == 17, "EntityStateRecord must be exactly 17 bytes");
 #pragma pack(pop)
 ```
-> **구현 설명**: 대역폭을 줄이기 위해 `#pragma pack(push, 1)`로 구조체 패딩을 제거했습니다. 클라이언트는 이동, 조준, 사격, 재장전, 상호작용 같은 입력을 `InputPacket` 하나로 압축해 전송하고, 서버는 이를 검증한 뒤 `EntityStateRecord` 배열 기반의 월드 스냅샷으로 좌표와 상태 플래그를 브로드캐스트합니다. 스냅샷 레코드는 17바이트로 고정되어 있으며, Fletcher-16 체크섬으로 손상된 레코드를 걸러냅니다. 이 외에도 데미지, 인벤토리, 건설, 문, 동맹, 탈출, 드랍 관련 패킷 타입을 분리하여 게임 내 상호작용을 처리합니다. 화염 타일은 엔티티 ID를 가진 월드 오브젝트가 아니라 타일 좌표 집합이므로, 스냅샷 레코드에 억지로 섞지 않고 `S2C_FireUpdate` 전용 패킷으로 별도 동기화하여 서버의 화염 상태와 클라이언트 바닥 그래픽을 일치시켰습니다.
+> **구현 설명**: 대역폭을 줄이기 위해 `#pragma pack(push, 1)`로 구조체 패딩을 제거했습니다. 클라이언트는 이동, 조준, 사격, 재장전, 상호작용 같은 입력을 `InputPacket` 하나로 압축해 전송하고, 서버는 이를 검증한 뒤 `EntityStateRecord` 배열 기반의 월드 스냅샷으로 좌표와 상태 플래그를 브로드캐스트합니다. 스냅샷 레코드는 17바이트로 고정되어 있으며, Fletcher-16 체크섬으로 손상된 레코드를 걸러냅니다. 이 외에도 데미지, 인벤토리, 건설, 문, 탈출, 드랍 관련 패킷 타입을 분리하여 게임 내 상호작용을 처리합니다. 화염 타일은 엔티티 ID를 가진 월드 오브젝트가 아니라 타일 좌표 집합이므로, 스냅샷 레코드에 억지로 섞지 않고 `S2C_FireUpdate` 전용 패킷으로 별도 동기화하여 서버의 화염 상태와 클라이언트 바닥 그래픽을 일치시켰습니다.
 
 **[코드 스니펫: 월드 스냅샷 최적화 브로드캐스팅 (NetworkSystem.cpp)]**
 ```cpp
@@ -156,7 +184,7 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
     
     // 3. CHAN_UNRELIABLE(빠른 상태 전송)을 통해 접속 중인 모든 클라이언트에 전송
     size_t totalLen = sizeof(SnapshotHeader) + count * sizeof(EntityStateRecord);
-    ENetPacket* peerPkt = enet_packet_create(buf, totalLen, 0);
+    ENetPacket* peerPkt = enet_packet_create(buf, totalLen, 2); // unsequenced snapshot
     for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
         if (!m_peers[pi].connected) continue;
         enet_peer_send(m_peers[pi].peer, CHAN_UNRELIABLE, peerPkt);
@@ -193,7 +221,7 @@ void NetworkClient::reconcile(uint16_t ackedSeq, float serverX, float serverY) {
     }
 }
 ```
-> **구현 설명**: 클라이언트가 입력을 서버로 전송함과 동시에 로컬에서 먼저 시뮬레이션(Prediction)합니다. 서버로부터 스냅샷을 받으면 `reconcile`을 호출하여 과거 예측 위치와 서버의 실제 위치 오차를 계산하고, 틀어졌을 경우(롤백) 현재까지의 입력들을 다시 재적용(Replay)하여 부드러운 이동을 보장합니다.
+> **구현 설명**: 클라이언트가 입력을 서버로 전송함과 동시에 로컬에서 먼저 시뮬레이션(Prediction)합니다. 서버로부터 스냅샷을 받으면 `reconcile`을 호출하여 과거 예측 위치와 서버의 실제 위치 오차를 계산하고, 틀어졌을 경우(롤백) 현재까지의 입력들을 다시 재적용(Replay)하여 네트워크 지연으로 인한 위치 튐을 줄입니다.
 
 ---
 
@@ -208,11 +236,13 @@ void NetworkClient::reconcile(uint16_t ackedSeq, float serverX, float serverY) {
 ```cpp
 // 플레이어와의 거리 계산 및 밤/낮에 따른 시야 범위(sightMult) 설정
 float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
-float sightMult = isNight ? 3.0f : 0.4f;
+float sightMult = isNight ? 2.4f : 0.9f;
 
 // 대상이 출혈(Bleeding) 상태일 경우 피 냄새를 맡고 감지 반경이 2배로 증가
 if (ncbt && ncbt->isBleeding) sightMult *= 2.0f;
-float sightR = ZOMBIE_SIGHT_RADIUS * sightMult;
+float sightR = (ai.type == ZombieType::Runner)
+             ? ZOMBIE_SIGHT_RADIUS * 1.5f * sightMult
+             : ZOMBIE_SIGHT_RADIUS * sightMult;
 
 if (dx*dx + dy*dy < sightR * sightR) {
     bool hasLOS = true;
@@ -234,7 +264,7 @@ if (dx*dx + dy*dy < sightR * sightR) {
     }
 }
 ```
-> **구현 설명**: 단순히 거리만 가까워졌다고 플레이어를 인식하면 좀비가 벽 너머를 투시하는 불합리함이 생깁니다. 이를 방지하기 위해 16픽셀 단위로 선을 긋는 **Raycast(시선 확보) 연산**을 수행하여 시야에 장애물이 없는지 판별합니다. 또한 밤에는 좀비의 시야 반경이 3배 늘어나며, 플레이어가 좀비에게 맞아 출혈(Bleeding) 디버프가 걸린 경우 **피 냄새를 맡고 감지 반경이 2배로 증폭**되는 디테일한 후각 추적 기믹을 추가하여 하드코어 생존 게임의 긴장감을 극대화했습니다.
+> **구현 설명**: 단순히 거리만 가까워졌다고 플레이어를 인식하면 좀비가 벽 너머를 투시하는 불합리함이 생깁니다. 이를 방지하기 위해 16픽셀 단위로 선을 긋는 **Raycast(시선 확보) 연산**을 수행하여 시야에 장애물이 없는지 판별합니다. 밤에는 좀비의 시야 반경이 2.4배로 늘어나고, Runner는 기본 감지 반경이 더 큽니다. 플레이어가 출혈(Bleeding) 상태일 경우에는 **피 냄새를 맡고 감지 반경이 2배로 증폭**되도록 하여, 전투 후 회복과 도주 판단이 중요해지도록 설계했습니다.
 
 **[코드 스니펫: 좀비 상태 전이 로직 일부]**
 ```cpp
@@ -294,7 +324,8 @@ void ZombieAISystem::doMovement(World& world, Entity zombie, ZombieAIComponent& 
 **[코드 스니펫: 안전 반경 기반 좀비 스폰 및 밤 웨이브 생성 (GameServer.cpp)]**
 ```cpp
 constexpr float ZOMBIE_PLAYER_SAFE_RADIUS = 960.0f;
-constexpr float NIGHT_WAVE_MIN_SPAWN_DIST = 1100.0f;
+constexpr float NIGHT_WAVE_MIN_SPAWN_DIST = 1400.0f;
+constexpr float NIGHT_WAVE_ATTACK_GRACE = 4.0f;
 
 auto tooCloseToPlayerOrSpawn = [&](float x, float y, float radius) {
     const float radius2 = radius * radius;
@@ -317,22 +348,25 @@ auto tooCloseToPlayerOrSpawn = [&](float x, float y, float radius) {
     return false;
 };
 
-// 밤 웨이브는 화면 밖 먼 거리에서 생성하되, 생성 직후 Frenzy 상태로 추격
-float dx = sx - txf->x;
-float dy = sy - txf->y;
-if (dx * dx + dy * dy < NIGHT_WAVE_MIN_SPAWN_DIST * NIGHT_WAVE_MIN_SPAWN_DIST) continue;
-ai.state = ZombieState::Frenzy;
+// 밤 웨이브는 모든 생존 플레이어 기준으로 화면 밖 먼 거리 후보만 허용
+if (tooCloseToAnyPlayer(sx, sy,
+    NIGHT_WAVE_MIN_SPAWN_DIST * NIGHT_WAVE_MIN_SPAWN_DIST)) continue;
+
+// 생성 직후 즉시 공격하지 못하게 유예 시간을 둔 뒤 추격 시작
+ai.state = ZombieState::Chase;
 ai.targetX = txf->x;
 ai.targetY = txf->y;
+ai.attackTimer = NIGHT_WAVE_ATTACK_GRACE;
 ```
-> **구현 설명**: 일반 좀비 리스폰은 파밍 건물과 열린 타일을 후보로 삼되, 플레이어와 팀 스폰 지점 반경 960px 안에는 생성하지 않도록 필터링했습니다. 따라서 서버가 처음 생성되거나 라운드가 리셋될 때 플레이어가 바라보는 시작 지역에 좀비가 갑자기 튀어나오는 문제를 줄였습니다. 반면 밤 웨이브는 게임 플레이 압박을 유지하기 위해 1100px 이상 떨어진 화면 밖 후보만 허용하고, 생성 즉시 `Frenzy` 상태로 전환하여 멀리서 플레이어 방향으로 뛰어오도록 구성했습니다. 맵 경계에 의해 좌표가 클램핑되면서 다시 가까워지는 후보는 버려, "보이지 않는 곳에서 몰려오는 웨이브"라는 의도를 지켰습니다.
+> **구현 설명**: 일반 좀비 리스폰은 파밍 건물과 열린 타일을 후보로 삼되, 플레이어와 팀 스폰 지점 반경 960px 안에는 생성하지 않도록 필터링했습니다. 따라서 서버가 처음 생성되거나 라운드가 리셋될 때 플레이어가 바라보는 시작 지역에 좀비가 갑자기 튀어나오는 문제를 줄였습니다. 밤 웨이브는 게임 플레이 압박을 유지하기 위해 모든 생존 플레이어 기준 1400px 이상 떨어진 화면 밖 후보만 허용하고, 생성 직후 4초간 공격 유예를 둔 뒤 `Chase` 상태로 추격하게 했습니다. 이는 멀티플레이 상황에서 한 플레이어 기준으로는 멀지만 다른 플레이어 바로 옆에 스폰되는 문제와, 웨이브 시작 직후 즉사하는 문제를 막기 위한 안전장치입니다.
 
 > **[그림 5]** ZombieAI FSM 상태전이 다이어그램
 > *(최종 PDF 편집 단계에서 FSM 상태전이 다이어그램 삽입)*
 
-### 4.2 FireSystem (화염 전파)
-- 화염병 투척 시 BFS(너비 우선 탐색) 알고리즘을 사용해 화염이 타일 단위로 번져나갑니다.
-- 설치된 포탑 등과 상호작용하여 연쇄 폭발을 일으키는 등 동적인 환경 변화를 유도합니다.
+### 4.2 FireSystem (화염 처리)
+- 화염병 투척 시 BFS(너비 우선 탐색) 알고리즘을 사용해 가연성 타일로 화염이 번져나갑니다.
+- 화염방사기는 뿌린 위치에만 짧은 시간 남는 비전파 화염 타일을 생성하여, 집 전체로 번지지 않도록 별도 TTL/DPS를 사용합니다.
+- 바리케이드나 포탑 같은 설치물과 접촉하면 해당 설치물을 파괴하는 방식으로 전장 변화를 유도합니다.
 
 **[코드 스니펫: BFS 기반 화염 전파 알고리즘]**
 ```cpp
@@ -355,7 +389,7 @@ void FireSystem::spreadBFS(World& world, TileMap& map) {
     }
 }
 ```
-> **구현 설명**: 매 `FIRE_SPREAD_INTERVAL` 주기로 호출되며, 화염의 최전선(`m_frontier`)에서 상하좌우 인접 타일을 검사합니다. 가연성 타일(나무, 데브리)일 경우 `igniteTile`을 호출하여 불을 붙이고 `m_frontier`에 편입시킵니다. `checkBuildingContact`를 통해 건물이나 포탑에 닿으면 즉시 파괴되거나 폭발하도록 처리했습니다.
+> **구현 설명**: 매 `FIRE_SPREAD_INTERVAL` 주기로 호출되며, 화염의 최전선(`m_frontier`)에서 상하좌우 인접 타일을 검사합니다. 가연성 타일(나무, 데브리)일 경우 `igniteTile`을 호출하여 불을 붙이고 `m_frontier`에 편입시킵니다. 반면 화염방사기 화염은 `canSpread=false`, `FLAMETHROWER_FIRE_TTL=3.0f`, `FLAMETHROWER_FIRE_DPS=6.0f`로 생성되어 뿌린 위치에만 잠시 남습니다. `checkBuildingContact`를 통해 바리케이드나 포탑 같은 설치물에 닿은 화염은 해당 설치물을 파괴하도록 처리했습니다.
 
 **[코드 스니펫: 화염 타일 네트워크 동기화 및 바닥 렌더링]**
 ```cpp
@@ -446,12 +480,11 @@ void CombatSystem::tickBleeding(World& world, float dt) {
 **[코드 스니펫: 행동별 소음 반경 및 이벤트 수확 파이프라인 (CombatComponent.h + NoiseSystem.cpp)]**
 ```cpp
 // ── 1단계: 행동별 소음 반경 정의 (CombatComponent.h) ──
-constexpr float NOISE_WALK_RADIUS   =  48.0f;  // 걷기: 1.5m
-constexpr float NOISE_RUN_RADIUS    = 160.0f;  // 달리기: 5m
-constexpr float NOISE_MELEE_RADIUS  = 256.0f;  // 근접 공격: 8m
-constexpr float NOISE_PISTOL_RADIUS = 960.0f;  // 권총 발사: 30m
-constexpr float NOISE_RIFLE_RADIUS  =1280.0f;  // 소총 발사: 40m
-constexpr float NOISE_EXPLOSION_RADIUS=2880.0f; // 폭발: 90m → 즉시 Frenzy 유발
+constexpr float NOISE_WALK_RADIUS     =  80.0f;  // 걷기: 2.5m
+constexpr float NOISE_RUN_RADIUS      = 240.0f;  // 달리기: 7.5m
+constexpr float NOISE_MELEE_RADIUS    = 288.0f;  // 근접 공격: 9m
+constexpr float NOISE_PISTOL_RADIUS   = 480.0f;  // 권총 발사: 15m
+constexpr float NOISE_RIFLE_RADIUS    = 680.0f;  // 소총 발사: 21.25m
 
 // ── 2단계: 이동 시 발소리 소음 발생 (MovementSystem.cpp) ──
 if (cbt && (len > 0.01f)) {
@@ -478,7 +511,7 @@ void NoiseSystem::update(World& world, float dt) {
     }
 }
 ```
-> **구현 설명**: 소음 시스템은 3단계 파이프라인으로 동작합니다. (1) 모든 행동에 `constexpr`로 고정된 소음 반경이 할당되어 있고, (2) 이동/사격/근접 공격 등의 로직에서 `emitNoise()`로 해당 틱의 소음을 등록하면, (3) `NoiseSystem::update()`가 매 틱마다 모든 엔티티의 소음 플래그를 수확하여 전역 `WorldNoiseEvent` 리스트에 좌표, 반경, 소음 카테고리와 함께 등록합니다. 좀비 AI(`ZombieAISystem`)는 이 리스트를 참조하여 상태 전이를 결정합니다. 웅크리기(Crouch) 시에는 소음이 0으로 설정되어 은밀한 플레이가 가능하며, 폭발(2880px)은 즉시 광란(Frenzy) 상태를 유발하는 등 행동마다 위험도가 세밀하게 차별화됩니다.
+> **구현 설명**: 소음 시스템은 3단계 파이프라인으로 동작합니다. (1) 실제 플레이 행동에 `constexpr`로 고정된 소음 반경이 할당되어 있고, (2) 이동/사격/근접 공격 등의 로직에서 `emitNoise()`로 해당 틱의 소음을 등록하면, (3) `NoiseSystem::update()`가 매 틱마다 모든 엔티티의 소음 플래그를 수확하여 전역 `WorldNoiseEvent` 리스트에 좌표, 반경, 소음 카테고리와 함께 등록합니다. 좀비 AI(`ZombieAISystem`)는 이 리스트를 참조하여 상태 전이를 결정합니다. 웅크리기(Crouch) 시에는 소음이 0으로 설정되어 은밀한 플레이가 가능하고, 총격과 근접 공격은 걷기보다 큰 반경으로 좀비를 유인하도록 차등 처리했습니다.
 
 #### Build System (건설 시스템)
 인벤토리의 재료를 확인하고 소모하여 월드에 바리케이드와 포탑을 배치합니다.
@@ -542,7 +575,7 @@ void BuildSystem::updateTurrets(World& world, float dt) {
     }
 }
 ```
-> **구현 설명**: 포탑은 매 틱마다 모든 생존 엔티티를 순회하며 사거리(`turretRange`) 안에 들어온 가장 가까운 적을 탐색합니다. 이때 핵심은 **내적(Dot Product)** 연산입니다. 포탑이 바라보는 전방 벡터(`dirX, dirY`)와 적까지의 방향 벡터 사이의 내적을 구한 뒤, `acos()`으로 사잇각을 계산하여 포탑의 사격 호(`turretArcDeg`)의 절반보다 작은지 비교합니다. 이를 통해 포탑을 360도 자유회전이 아닌, 특정 방향으로만 사격하는 현실적인 방어 시설로 만들었습니다. 아군(같은 팀)은 공격 대상에서 자동으로 제외됩니다.
+> **구현 설명**: 포탑은 매 틱마다 모든 생존 엔티티를 순회하며 사거리(`turretRange`) 안에 들어온 가장 가까운 적을 탐색합니다. 이때 핵심은 **내적(Dot Product)** 연산입니다. 포탑이 바라보는 전방 벡터(`dirX, dirY`)와 적까지의 방향 벡터 사이의 내적을 구한 뒤, `acos()`으로 사잇각을 계산하여 포탑의 사격 호(`turretArcDeg`)의 절반보다 작은지 비교합니다. 이를 통해 포탑을 360도 자유회전이 아닌, 특정 방향으로만 사격하는 현실적인 방어 시설로 만들었습니다. 플레이어 직접 공격은 팀킬이 가능하지만, 포탑은 설치 팀과 같은 팀 엔티티를 자동 표적에서 제외합니다.
 
 #### Extraction System (탈출 시스템)
 게임 시간 5분 후 탈출존이 열리며 5초 채널링 시 탈출에 성공합니다.
@@ -567,27 +600,8 @@ if (st.channeling) {
 ```
 > **구현 설명**: 탈출존 내에서 F키를 눌러 채널링을 시작하면 `channelTimer`가 증가합니다. 이때 플레이어가 이동(4px 이상)하거나 대미지를 입으면 타이머가 초기화되어 긴장감을 유도하며, 5초(`EXTRACTION_CHANNEL_TIME`)를 채우면 성공 이벤트를 발생시킵니다.
 
-#### Alliance System (연합 및 배신)
-타 팀과 핸드셰이크 방식으로 연합을 맺고, 동맹 팀을 공격하면 배신으로 처리되어 연합이 해제됩니다.
-**[코드 스니펫: 연합 제안 및 핸드셰이크 (AllianceSystem.cpp)]**
-```cpp
-bool AllianceSystem::proposeAlliance(uint8_t a, uint8_t b) {
-    m_proposed[a][b] = 1;
-    // B팀도 A팀에게 연합을 제안했다면(핸드셰이크 성립)
-    if (m_proposed[b][a]) {
-        setAlliance(a, b, true);
-        m_proposed[a][b] = 0;
-        m_proposed[b][a] = 0;
-        broadcast(a, b, true);
-        return true;
-    }
-    return false;
-}
-```
-> **구현 설명**: A팀이 B팀에게 연합을 제안할 경우 `m_proposed` 배열에 상태를 기록합니다. B팀 역시 A팀에게 제안한 기록이 있다면 즉시 연합 상태(`setAlliance`)로 변경되고 양측 클라이언트에 브로드캐스트하여 동맹 여부를 HUD에 반영합니다. 연합 중인 팀을 공격하면 `handleBetrayal` 경로로 연합을 해제하여, 협력과 배신이 모두 가능한 PvP 긴장감을 만들었습니다.
-
 #### Database (MySQL 영구 저장 및 인증)
-플레이어의 계정 정보, 인벤토리, 스태시를 MySQL 서버에 저장합니다. 서버는 DB 연결 실패 시 기본적으로 로그인과 회원가입을 차단하며, 로컬 테스트가 필요한 경우에만 `DEADZONE_OFFLINE_AUTH=1` 환경변수로 계정 검증 우회를 명시적으로 켤 수 있습니다.
+플레이어의 계정 정보, 인벤토리, 스태시를 MySQL 서버에 저장합니다. 서버는 DB 연결 실패 시 로그인과 회원가입을 차단하며, 로컬 테스트도 `scripts/setup_database.sh`로 MySQL DB와 테스트 계정을 생성한 뒤 실제 DB 인증 경로를 사용합니다. 기본 테스트 로그인은 `test` / `test1234`입니다.
 **[코드 스니펫: 트랜잭션 기반 인벤토리 DB 저장 (Database.cpp)]**
 ```cpp
 void Database::saveAccount(const std::string& username, const InventoryComponent& inv) {
@@ -607,7 +621,7 @@ void Database::saveAccount(const std::string& username, const InventoryComponent
     // 3. 기존 인벤토리 기록 일괄 삭제 (Wipe) 후 새로 Insert
     query("DELETE FROM inventory WHERE username='" + escUser.data() + "'");
     
-    // 4. 아이템 하나당 INSERT (SQL Injection 방지를 위해 Escape)
+    // 4. Grid / Equipped / Stash 아이템 하나당 INSERT (SQL Injection 방지를 위해 Escape)
     for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
         const Item& item = inv.slots[i];
         if (!item.isValid()) continue;
@@ -620,7 +634,7 @@ void Database::saveAccount(const std::string& username, const InventoryComponent
     txn.commit(); // 모든 쿼리가 정상 실행되면 DB에 반영
 }
 ```
-> **구현 설명**: 유저가 게임을 종료하거나 탈출에 성공할 때 인벤토리를 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 쿼리가 실패하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 인벤토리 손실을 방지합니다. DB 연결이 실패한 경우에는 인증 단계에서 접속을 차단하므로, 발표용 서버에서는 MySQL 접속 설정을 먼저 검증해야 합니다.
+> **구현 설명**: 유저가 게임을 종료하거나 탈출에 성공할 때 인벤토리를 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 쿼리가 실패하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 인벤토리 손실을 방지합니다. 실제 저장 코드는 `is_equipped=0`을 그리드, `1`을 장비 슬롯, `2`를 로비 스태시로 구분해 같은 `inventory` 테이블에 저장합니다. DB 연결이 실패한 경우에는 인증 단계에서 접속을 차단하므로, 발표용 서버에서는 MySQL 접속 설정을 먼저 검증해야 합니다.
 
 ### 4.4 플레이어 이동 처리 및 넉백 물리 (MovementSystem)
 클라이언트로부터 받은 입력 패킷을 서버에서 물리적으로 시뮬레이션하는 핵심 시스템입니다.
@@ -726,7 +740,7 @@ bool CombatSystem::tryMeleeAttack(World& world, Entity attacker) {
 
 ---
 
-## 5. 클라이언트 구현
+## 5장. 클라이언트 구현
 
 ### 5.1 렌더링 및 카메라 처리
 - **Y-Sort 렌더링**: 2D 탑다운 시점에서 입체감을 주기 위해 엔티티들의 Y 좌표를 기준으로 렌더링 순서를 정렬합니다.
@@ -784,7 +798,7 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 - **파티클 및 환경 이펙트**: 총구 화염(Muzzle Flash), 탄피 배출, 피격 시 혈흔, 회복 이펙트에 더해 서버에서 동기화된 화염 타일을 바닥 그래픽으로 렌더링하여 화염병의 착탄 지점과 전파 범위를 시각적으로 확인할 수 있게 했습니다.
 - **화면 연출**: 피격 시 히트 플래시(화면 붉어짐) 및 카메라 쉐이크를 적용했습니다.
 
-### 5.3 UI / UX
+### 5.2 UI / UX
 - **인벤토리**: 마우스 드래그 앤 드롭 방식을 지원하여 직관적인 아이템 장착 및 슬롯 이동, 수량 분할 버리기가 가능합니다.
 - **제작 UI**: 건설 모드 진입 시 포탑/바리케이드/제작대 등 조합에 필요한 재료 리스트를 직관적으로 표시합니다.
 
@@ -802,18 +816,43 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 - **OS 및 개발 환경**: macOS, C++17
 - **주요 라이브러리**: CMake, SDL2 (image, mixer, ttf), ENet, cJSON, MySQL (Connector)
 - **빌드 방식**: CMake 빌드 도구를 활용 (`cmake --build build`)
-- **실행 방식**: `run_game.sh`로 서버와 클라이언트를 함께 실행하거나, `build/bin/DeadZoneServer`와 `build/bin/DeadZoneClient`를 각각 실행합니다. 클라이언트는 실행 파일 위치를 기준으로 `assets/`, `data/`를 읽도록 구성했습니다.
-- **DB 설정**: `.env.server` 또는 환경변수(`DEADZONE_DB_HOST`, `DEADZONE_DB_USER`, `DEADZONE_DB_PASS`, `DEADZONE_DB_NAME`)로 MySQL 접속 정보를 설정합니다. DB가 없으면 로그인은 차단되며, 로컬 테스트 전용으로만 `DEADZONE_OFFLINE_AUTH=1`을 사용할 수 있습니다.
+- **가장 쉬운 실행 방식**: macOS Finder에서 `start_deadzone.command`를 더블클릭하면 DB 준비 후 서버와 클라이언트를 함께 실행합니다. 최초 1회 실행 시 MySQL 관리자 비밀번호를 묻는 경우가 있으며, 입력에 성공하면 `deadzone` DB, `deadzone_user` 앱 계정, 기본 테스트 로그인(`test` / `test1234`)을 자동 생성합니다.
+- **터미널 실행 방식**: `./run_game.sh`로 서버와 클라이언트를 함께 실행하거나, `build/bin/DeadZoneServer`와 `build/bin/DeadZoneClient`를 각각 실행합니다. 클라이언트는 실행 파일 위치를 기준으로 `assets/`, `data/`를 읽도록 구성했습니다.
+- **DB 설정**: `scripts/setup_database.sh`를 실행하면 로컬 MySQL에 `deadzone` DB, `deadzone_user` 계정, 기본 테스트 로그인(`test` / `test1234`)을 만들고 `.env.server`를 작성합니다. `run_game.sh`와 `run_server.sh`는 `.env.server`가 없을 때 이 준비 과정을 먼저 실행합니다. 직접 설정할 경우 환경변수(`DEADZONE_DB_HOST`, `DEADZONE_DB_USER`, `DEADZONE_DB_PASS`, `DEADZONE_DB_NAME`)를 사용합니다.
+
+#### 교수님 테스트용 실행 절차
+1. MySQL이 설치되어 있지 않다면 먼저 설치 및 실행합니다. macOS Homebrew 환경에서는 `brew install mysql && brew services start mysql`을 사용할 수 있습니다.
+2. 프로젝트 폴더의 `start_deadzone.command`를 더블클릭합니다. 실행 파일이 없으면 CMake 빌드를 먼저 수행한 뒤 DB 설정과 게임 실행으로 이어집니다.
+3. 최초 실행에서 MySQL 관리자 비밀번호를 요구하면 로컬 MySQL `root` 비밀번호를 입력합니다.
+4. 비밀번호 입력 후 자동으로 테스트 계정이 생성됩니다. 로그인 화면에서 아이디 `test`, 비밀번호 `test1234`를 입력합니다.
+5. MySQL 관리자 비밀번호를 모르는 경우에는 터미널에서 `MYSQL_ADMIN_USER`, `MYSQL_ADMIN_PASS`를 명시해 실행할 수 있습니다.
+
+```bash
+MYSQL_ADMIN_USER=root MYSQL_ADMIN_PASS='root비밀번호' ./scripts/setup_database.sh
+./run_game.sh
+```
+
+6. `Access denied for user 'root'@'localhost'`가 표시되거나 비밀번호를 알 수 없는 환경에서는 MySQL에서 DB 생성 권한이 있는 계정 정보를 확인한 뒤 아래처럼 실행합니다.
+
+```bash
+MYSQL_ADMIN_USER='관리자계정' MYSQL_ADMIN_PASS='관리자비밀번호' ./scripts/setup_database.sh
+```
 
 ### 6.2 구현 완료 주요 기능
-- ECS 기반 자체 서버 구조 구축 및 서버 권한 멀티플레이 연동 완료
-- 상태 기반 좀비 AI (시야 검사, 소음 반응, 장애물 우회, 안전 반경 기반 리스폰 및 밤 웨이브 원거리 추격) 구현
-- 동적 상호작용 시스템 (화염 전파, 화염 타일 네트워크 동기화/렌더링, 건물/문 파괴, 포탑 건설, 탈출존 오픈)
-- 인벤토리 기반 파밍, 장비 장착, 아이템 드랍, DB 연동 영속화 및 명시적 로컬 테스트 인증 우회 처리
+| 기능 | 완료 내용 | 구현 포인트 |
+|---|---|---|
+| 서버 권한 멀티플레이 | 클라이언트 입력 수신, 서버 틱 처리, 월드 스냅샷 전송 | ENet 채널 분리, 입력 seqAck, 클라이언트 예측/보정 |
+| ECS 월드 | 플레이어, 좀비, 건물, 루트, 화염 관련 데이터를 컴포넌트로 분리 | ComponentPool, 지연 파괴, Dirty Flag |
+| 좀비 AI | Idle/Alert/Chase/Frenzy FSM, 소음/시야/출혈 감지, 밤 웨이브 | Raycast LOS, NoiseSystem, 안전 반경 스폰, 웨이브 공격 유예 |
+| 전투 | 총기 사격, 근접 공격, 출혈, 화염 피해 | Hitscan Raycast, OBB 근접 판정, 서버 권한 `applyDamage` |
+| 건설/방어 | 바리케이드, 포탑, 제작대, 문 수리/파괴 | 타일 점유, 재료 검증, 포탑 사격 호 내적 판정 |
+| 화염 시스템 | 화염병 전파, 화염방사기 비전파 바닥 화염, 클라이언트 그래픽 동기화 | BFS 전파, FireUpdatePacket, 타일 단위 데미지 |
+| 인벤토리/DB | 로비 스태시, 장비 장착, 아이템 이동/드랍, 계정 저장 | MySQL 트랜잭션 저장, 테스트 계정 자동 생성 |
+| 실행 편의성 | 더블클릭 실행 파일, DB 자동 준비 스크립트, 테스트 계정 안내 | `start_deadzone.command`, `setup_database.sh`, `.env.server` |
 
 ### 6.3 미완성 사항 및 한계점
 - 좀비 개체 수가 맵 전역에 다수 스폰될 시, 충돌 처리나 탐색에서 전체 엔티티 순회가 발생하여 O(N²) 성능 병목 우려가 존재합니다. 향후 QuadTree 등 공간 분할 최적화가 요구됩니다.
-- DB 미설정 환경에서는 기본 로그인이 차단됩니다. 로컬 테스트용 인증 우회(`DEADZONE_OFFLINE_AUTH=1`)를 켠 경우 계정·인벤토리 영속 저장은 수행되지 않으므로 발표용 서버에서는 MySQL 접속 설정 검증이 필요합니다.
+- DB 미설정 환경에서는 로그인이 차단됩니다. 발표나 테스트 전에는 `scripts/setup_database.sh`로 MySQL 접속 설정과 테스트 계정 생성을 먼저 검증해야 합니다.
 - `data/sounds.json`에는 세분화된 사운드 키가 정의되어 있으나, 현재 실제 런타임에서 사용하는 기본 효과음 위주로 파일이 존재합니다. 발표 빌드에서는 누락 사운드 로그가 발생하지 않도록 키-파일 매칭 정리가 필요합니다.
 - `smg_9mm` 전용 아이콘은 별도 PNG 에셋으로 추가했습니다. 남은 에셋 보강 항목은 세분화된 사운드 파일 매칭입니다.
 

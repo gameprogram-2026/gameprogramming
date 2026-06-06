@@ -21,7 +21,7 @@ public:
     void onBuildingSpawned(SpawnCallback cb)    { m_onSpawn      = std::move(cb); }
     void onTurretFire(TurretFireCallback cb)    { m_onTurretFire = std::move(cb); }
 
-    /// Called when a player sends C2S_BuildRequest.
+    /// Called when a player sends C2S_BuildPlace.
     /// Validates range, material, tile availability; spawns entity on success.
     /// Returns the new entity (invalid on failure).
     Entity tryBuild(World& world, TileMap& map,

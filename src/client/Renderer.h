@@ -196,7 +196,6 @@ public:
                  const std::string& weaponName  = "",
                  const std::string& weaponGrade = "normal",
                  const int teamAlive[4] = nullptr,   ///< 팀1~4 생존 인원 (nullptr=미표시)
-                 uint8_t allianceBits  = 0,          ///< 연합 비트맵
                  float gameTime = 0.0f,              ///< 서버 진행 시간 (초)
                  bool isReloading = false);          ///< 장전 중 여부
 

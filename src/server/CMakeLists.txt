@@ -10,7 +10,6 @@ add_executable(DeadZoneServer
     systems/CombatSystem.cpp
     systems/NoiseSystem.cpp
     systems/BuildSystem.cpp
-    systems/AllianceSystem.cpp
     systems/ExtractionSystem.cpp
 )
 

@@ -130,7 +130,6 @@ bool InputHandler::poll(InputState& out, float playerScreenX, float playerScreen
     if (m_keys[SDL_SCANCODE_LCTRL])  out.actions |= ACT_CROUCH;
     if (m_keys[SDL_SCANCODE_R])      out.actions |= ACT_RELOAD;
     if (m_keys[SDL_SCANCODE_F])      out.actions |= ACT_INTERACT;
-    if (m_keys[SDL_SCANCODE_TAB])    out.actions |= ACT_INVENTORY;
     if (m_keys[SDL_SCANCODE_M])      out.actions |= ACT_MAP;
 
     int mx, my;

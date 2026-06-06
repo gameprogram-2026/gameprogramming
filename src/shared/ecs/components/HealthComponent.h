@@ -13,7 +13,6 @@ namespace dz {
 // Team damage rules are enforced by server combat/build systems:
 //   Same-team targeting is filtered by systems that explicitly own targeting
 //   decisions, while direct damage paths may still apply PvP damage.
-//   Temporary alliances suppress AI targeting, not physical hit boxes.
 // ─────────────────────────────────────────────────────────────────────────────
 enum class Team : uint8_t {
     Neutral = 0,

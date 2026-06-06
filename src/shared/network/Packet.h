@@ -170,18 +170,10 @@ struct DeathEventPacket {
     char     killerName[16] = {};
 };
 
-struct AlliancePacket {
-    uint8_t  packetType = 0;   // S2C_AllianceAck or C2S_AllianceBreak
-    uint8_t  teamA      = 0;
-    uint8_t  teamB      = 0;
-    uint8_t  active     = 0;   // 1 = truce established, 0 = broken
-};
-
-struct ExtractionPacket {
-    uint8_t  packetType  = static_cast<uint8_t>(PacketType::S2C_ExtractionStart);
-    uint16_t playerID    = 0;
-    float    channelTime = 5.0f;
-    uint8_t  zoneID      = 0;
+struct ExtractionResultPacket {
+    uint8_t  packetType = static_cast<uint8_t>(PacketType::S2C_ExtractionResult);
+    uint16_t playerID   = 0;
+    uint8_t  zoneID     = 0;
 };
 
 struct SirenEventPacket {
@@ -277,7 +269,6 @@ struct BuildAckPacket {
 struct TeamStatusPacket {
     uint8_t  packetType    = static_cast<uint8_t>(PacketType::S2C_TeamStatus);
     uint8_t  aliveCount[4] = {};  // 팀1~4 생존 인원
-    uint8_t  allianceBits  = 0;   // 비트 0~5: 팀쌍(1-2, 1-3, 1-4, 2-3, 2-4, 3-4) 연합 여부
     uint16_t gameTimeSec   = 0;   // 서버 라운드 진행 시간(초)
 };
 

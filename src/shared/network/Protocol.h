@@ -29,10 +29,6 @@ enum InputAction : uint16_t {
     ACT_INTERACT    = 1 << 3,
     ACT_SPRINT      = 1 << 4,
     ACT_CROUCH      = 1 << 5,
-    ACT_THROW       = 1 << 6,
-    ACT_BUILD       = 1 << 7,
-    ACT_SWAP_WEAPON = 1 << 8,
-    ACT_INVENTORY   = 1 << 9,
     ACT_MAP         = 1 << 10,
     ACT_MELEE       = 1 << 11,
 };
@@ -58,36 +54,19 @@ enum class PacketType : uint8_t {
     // ── Game state ────────────────────────────────────────────────────────────
     C2S_Input           = 0x10,   ///< Client → server: player input this frame
     S2C_WorldSnapshot   = 0x11,   ///< Server → all: full/delta world state
-    S2C_EntitySpawn     = 0x12,
-    S2C_EntityDestroy   = 0x13,
 
     // ── Gameplay events (reliable) ────────────────────────────────────────────
     S2C_DamageEvent     = 0x20,
     S2C_DeathEvent      = 0x21,
-    S2C_LootDrop        = 0x22,
     C2S_LootPickup      = 0x23,
-    C2S_BuildRequest    = 0x24,
     S2C_BuildAck        = 0x25,
     C2S_CraftRequest    = 0x26,
     C2S_FireThrow       = 0x27,   ///< Molotov, flamethrower burst
     S2C_FireUpdate      = 0x28,   ///< BFS fire tile delta
 
-    // ── Alliance ──────────────────────────────────────────────────────────────
-    C2S_AlliancePropose = 0x30,
-    S2C_AllianceAck     = 0x31,
-    C2S_AllianceBreak   = 0x32,
-
     // ── Extraction ────────────────────────────────────────────────────────────
-    C2S_ExtractionReady = 0x40,
-    S2C_ExtractionStart = 0x41,
     S2C_ExtractionResult= 0x42,
     S2C_ExtractionUpdate= 0x43,
-
-    // ── Noise (unreliable) ────────────────────────────────────────────────────
-    S2C_NoiseEvent      = 0x50,
-
-    // ── Zombie AI ─────────────────────────────────────────────────────────────
-    S2C_ZombieStateChange = 0x60,
 
     // ── Item / HP ─────────────────────────────────────────────────────────────
     C2S_UseItem         = 0x70,   ///< 소모품 사용 요청
@@ -97,7 +76,7 @@ enum class PacketType : uint8_t {
     C2S_BuildPlace      = 0x73,   ///< 건설 배치 요청
 
     // ── Team status (reliable, broadcast) ────────────────────────────────────
-    S2C_TeamStatus      = 0x74,   ///< 팀별 생존 인원 + 연합 행렬
+    S2C_TeamStatus      = 0x74,   ///< 팀별 생존 인원
 
     // ── Turret events (unreliable) ────────────────────────────────────────────
     S2C_TurretFire      = 0x75,   ///< 포탑 발사 이벤트 (레이저 빔 시각화)

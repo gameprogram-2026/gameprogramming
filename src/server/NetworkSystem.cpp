@@ -293,19 +293,6 @@ void NetworkSystem::handlePacket(uint32_t peerIdx,
         if (m_onUseItem) m_onUseItem(peerIdx, pkt.key);
         break;
     }
-    case PacketType::C2S_AlliancePropose: {
-        // 2-byte payload: [type, toTeam]
-        if (len < 2) return;
-        uint8_t toTeam = data[1];
-        if (m_onAlliance) m_onAlliance(peerIdx, toTeam);
-        break;
-    }
-    case PacketType::C2S_AllianceBreak: {
-        if (len < 2) return;
-        uint8_t toTeam = data[1];
-        if (m_onAlliance) m_onAlliance(peerIdx, toTeam); // reuse — GameServer distinguishes
-        break;
-    }
     case PacketType::C2S_BuildPlace: {
         if (len < sizeof(BuildPlacePacket)) return;
         BuildPlacePacket pkt{};
@@ -374,10 +361,9 @@ void NetworkSystem::sendHpSync(uint32_t peerIdx, uint16_t netID,
 // ─────────────────────────────────────────────────────────────────────────────
 // broadcastTeamStatus
 // ─────────────────────────────────────────────────────────────────────────────
-void NetworkSystem::broadcastTeamStatus(World& world, uint8_t allianceBits, uint16_t gameTimeSec) {
+void NetworkSystem::broadcastTeamStatus(World& world, uint16_t gameTimeSec) {
     TeamStatusPacket pkt{};
     pkt.packetType   = static_cast<uint8_t>(PacketType::S2C_TeamStatus);
-    pkt.allianceBits = allianceBits;
     pkt.gameTimeSec  = gameTimeSec;
 
     for (EntityID id : world.alive()) {

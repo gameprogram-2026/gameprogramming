@@ -2225,7 +2225,6 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
                         const std::string& weaponName,
                         const std::string& weaponGrade,
                         const int teamAlive[4],
-                        uint8_t allianceBits,
                         float gameTime,
                         bool isReloading) {
     TTF_Font* fTiny = m_fonts.get(11);
@@ -2524,8 +2523,6 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
     // ══════════════════════════════════════════════════════════════
     if (teamAlive) {
         static const char* tnames[] = {"", "ALPHA", "BRAVO", "CHARLIE", "DELTA"};
-        static const int pairBitA[] = {1, 1, 1, 2, 2, 3};
-        static const int pairBitB[] = {2, 3, 4, 3, 4, 4};
 
         const int TPW = 160, TPH = 4 * 24 + 20;
         int tpx = m_screenW - TPW - 16, tpy = 16;
@@ -2546,12 +2543,6 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
             SDL_Color ttc = Col::TEAM[t];
             bool isMe = (t == teamID);
             bool isDead = (teamAlive[t-1] == 0);
-
-            bool allied = false;
-            for (int k = 0; k < 6 && !allied; ++k)
-                if ((pairBitA[k] == teamID && pairBitB[k] == t) ||
-                    (pairBitB[k] == teamID && pairBitA[k] == t))
-                    if (allianceBits & (1 << k)) allied = true;
 
             // 행 배경 (내 팀은 더 밝게)
             if (isMe) {
@@ -2579,10 +2570,6 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
                 drawText(alive, tpx + TPW - 30, ry + 4, {100, 110, 120, 200}, fTiny);
             }
 
-            // 연합 뱃지
-            if (allied && !isDead) {
-                drawText("♦", tpx + 90, ry + 4, {80, 230, 120, 200}, fTiny);
-            }
             if (isMe) {
                 drawText("◄", tpx + TPW - 14, ry + 4, tc, fTiny);
             }
@@ -2673,7 +2660,7 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
     // ══════════════════════════════════════════════════════════════
     {
         const bool compact = m_screenW < 1050;
-        const int PW = compact ? 430 : 560;
+        const int PW = compact ? 500 : 640;
         const int PH = 44;
         const int PX = m_screenW / 2 - PW / 2;
         const int PY = m_screenH - 136;
@@ -3874,7 +3861,7 @@ void Renderer::drawBuildModeOverlay(bool active, int buildType,
     static const char* typeNames[] = {"바리케이드", "포탑", "제작대", "문"};
     const char* typeName = (buildType >= 0 && buildType < 4) ? typeNames[buildType] : "?";
     const int panelW = std::min(560, std::max(360, m_screenW - 48));
-    const int panelH = buildType == static_cast<int>(BuildingType::Turret) ? 82 : 64;
+    const int panelH = 82;
     const int panelX = m_screenW / 2 - panelW / 2;
     const int panelY = 54;
     drawPanel(panelX, panelY, panelW, panelH,
@@ -3893,7 +3880,8 @@ void Renderer::drawBuildModeOverlay(bool active, int buildType,
         SDL_RenderFillRect(m_renderer, &kr);
         SDL_SetRenderDrawColor(m_renderer, accent.r, accent.g, accent.b, 180);
         SDL_RenderDrawRect(m_renderer, &kr);
-        drawText(key, x + kw / 2, y + 2, accent, fSm, true);
+        drawTextShadow(key, x + kw / 2, y + 2,
+                       {245, 248, 250, 255}, {0, 0, 0, 220}, fSm, true);
         drawText(label, x + kw + 6, y + 2, {200, 205, 210, 230}, fSm);
         return kw + 6 + lw + 14;
     };
@@ -3906,8 +3894,11 @@ void Renderer::drawBuildModeOverlay(bool active, int buildType,
     if (buildType == static_cast<int>(BuildingType::Turret)) {
         drawBuildKey(panelX + 14, panelY + 56, "R", "포탑 방향 회전", {95,180,235,230});
     } else {
-        drawText("Z 바리케이드  X 포탑  C 제작대  V로 문 선택",
-                 panelX + 14, panelY + 52, {130, 145, 160, 220}, fSm);
+        int sx = panelX + 14;
+        sx += drawBuildKey(sx, panelY + 52, "Z", "바리케이드", {220,165,90,230});
+        sx += drawBuildKey(sx, panelY + 52, "X", "포탑", {95,180,235,230});
+        sx += drawBuildKey(sx, panelY + 52, "C", "제작대", {230,205,95,230});
+        drawBuildKey(sx, panelY + 52, "V", "문 선택", {180,200,220,230});
     }
 }
 

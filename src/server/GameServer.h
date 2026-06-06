@@ -12,7 +12,6 @@
 #include "server/systems/CombatSystem.h"
 #include "server/systems/NoiseSystem.h"
 #include "server/systems/BuildSystem.h"
-#include "server/systems/AllianceSystem.h"
 #include "server/systems/ExtractionSystem.h"
 #include "server/Database.h"
 
@@ -44,9 +43,7 @@ private:
     void onExtracted(Entity player, uint8_t zoneID);
     void onDeathLoot(Entity player);
     void onBuildingDestroyed(uint32_t buildingNetID, bool explosion);
-    void onAllianceChanged(uint8_t teamA, uint8_t teamB, bool active);
     void onUseItem(uint32_t peerIdx, const char* key);
-    void onAllianceProposeReq(uint32_t peerIdx, uint8_t toTeam);
     void onBuildPlace(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction = 0);
     void onDoorRepairReq(uint32_t peerIdx, int16_t tileX, int16_t tileY);
     void onCraftRequest(uint32_t peerIdx, uint8_t recipeID);
@@ -110,7 +107,6 @@ private:
     ZombieAISystem   m_zombieAI;
     FireSystem       m_fire;
     BuildSystem      m_build;
-    AllianceSystem   m_alliance;
     ExtractionSystem m_extraction;
     // Initialized last — holds refs to all other systems
     std::unique_ptr<GameLogic> m_logic;

@@ -16,7 +16,6 @@ struct DamageResult {
     float    remainingHp= 0.0f;
     DamageType type     = DamageType::Melee;
     bool     killed     = false;
-    bool     betrayal   = false; ///< Attacker and victim were allied
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,7 +25,6 @@ struct DamageResult {
 //  • Applies bleeding DoT each tick
 //  • Handles death (loot drop signal, entity removal)
 //  • Enforces friendly-fire OFF within teams
-//  • Detects betrayal (attacking an ally → breaks alliance)
 // ─────────────────────────────────────────────────────────────────────────────
 class CombatSystem {
 public:
@@ -44,8 +42,7 @@ public:
 
     /// Apply direct damage to an entity (used by fire, explosions, etc.)
     DamageResult applyDamage(World& world, Entity victim, Entity attacker,
-                              float rawDamage, DamageType type,
-                              const uint8_t* allianceMatrix = nullptr);
+                              float rawDamage, DamageType type);
 
     /// Trigger turret explosion at world position.
     void triggerExplosion(World& world, float wx, float wy,

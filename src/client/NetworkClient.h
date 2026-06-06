@@ -105,7 +105,6 @@ public:
 
     // ── 새 send 메서드 ──────────────────────────────────────────────────────────
     void sendUseItem(const char* key);
-    void sendAlliancePropose(uint8_t toTeam);
     void sendBuildPlace(int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction = 0);
     void sendCraftRequest(uint8_t recipeID);
     void sendLootPickup(uint32_t lootNetID);
@@ -169,7 +168,6 @@ public:
     int      teamAlive(int team) const noexcept {
         return (team >= 1 && team <= 4) ? m_teamAlive[team-1] : 0;
     }
-    uint8_t  allianceBits() const noexcept { return m_allianceBits; }
     uint16_t gameTime() const { return m_gameTimeSec; }
 
     const std::array<RemoteEntityState, 512>& remotes() const { return m_remotes; }
@@ -227,7 +225,6 @@ private:
     bool        m_isAuthenticated = false;
 
     int         m_teamAlive[4] = {0, 0, 0, 0};
-    uint8_t     m_allianceBits = 0;
     bool        m_hasSirenEvent = false;
     bool        m_hasExtractionEvent = false;
     bool        m_buildSuccess  = false;

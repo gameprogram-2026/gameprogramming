@@ -332,16 +332,6 @@ void GameLogic::handleReload(uint32_t ownerID) {
     DZ_LOG_DEBUG("[Logic] Reload started for owner %u", ownerID);
 }
 
-void GameLogic::handleAlliancePropose(uint8_t fromTeam, uint8_t toTeam) {
-    bool established = m_alliance.proposeAlliance(fromTeam, toTeam);
-    DZ_LOG_INFO("[Logic] Alliance propose %u→%u: %s",
-                fromTeam, toTeam, established ? "ESTABLISHED" : "pending");
-}
-
-void GameLogic::handleAllianceBreak(uint8_t fromTeam, uint8_t toTeam) {
-    m_alliance.breakAlliance(fromTeam, toTeam);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // handleLootPickup — range check, transfer item, destroy loot entity
 // ─────────────────────────────────────────────────────────────────────────────

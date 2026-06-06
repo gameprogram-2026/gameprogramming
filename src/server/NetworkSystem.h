@@ -36,7 +36,6 @@ public:
     using ConnectHandler = std::function<void(uint32_t peerIdx)>;
     using DisconHandler  = std::function<void(uint32_t peerIdx)>;
     using UseItemCB      = std::function<void(uint32_t peerIdx, const char* key)>;
-    using AllianceCB     = std::function<void(uint32_t peerIdx, uint8_t toTeam)>;
     using BuildCB        = std::function<void(uint32_t peerIdx, int16_t tileX, int16_t tileY, uint8_t buildingType, uint8_t direction)>;
     using CraftCB        = std::function<void(uint32_t peerIdx, uint8_t recipeID)>;
     using LootPickupCB   = std::function<void(uint32_t peerIdx, uint32_t lootNetID)>;
@@ -67,7 +66,7 @@ public:
 
     // ── HP & Stamina sync ─────────────────────────────────────────────────────
     void sendHpSync(uint32_t peerIdx, uint16_t netID, float hp, float maxHp, float stamina, float maxStamina, uint8_t flags);
-    void broadcastTeamStatus(World& world, uint8_t allianceBits, uint16_t gameTimeSec);
+    void broadcastTeamStatus(World& world, uint16_t gameTimeSec);
 
     // ── Utils ─────────────────────────────────────────────────────────────────
     void disconnectPeer(uint32_t peerIdx) {
@@ -87,7 +86,6 @@ public:
     void onSelectWeapon(SelectWeaponCB h)   { m_onSelectWeapon = std::move(h); }
     void onDoorToggle(DoorToggleCB h)       { m_onDoorToggle = std::move(h); }
     void onUseItem(UseItemCB h)       { m_onUseItem = std::move(h); }
-    void onAlliancePropose(AllianceCB h){ m_onAlliance = std::move(h); }
     void onBuildPlace(BuildCB cb)        { m_onBuild = std::move(cb); }
     void onCraft(CraftCB cb)             { m_onCraft = std::move(cb); }
     void onLootPickup(LootPickupCB cb)   { m_onLootPickup = std::move(cb); }
@@ -115,7 +113,6 @@ private:
     SelectWeaponCB  m_onSelectWeapon;
     DoorToggleCB    m_onDoorToggle;
     UseItemCB       m_onUseItem;
-    AllianceCB      m_onAlliance;
     BuildCB         m_onBuild;
     CraftCB         m_onCraft;
     LootPickupCB    m_onLootPickup;

@@ -20,8 +20,7 @@ bool hasServerEnv() {
     return std::getenv("DEADZONE_DB_HOST") ||
            std::getenv("DEADZONE_DB_USER") ||
            std::getenv("DEADZONE_DB_PASS") ||
-           std::getenv("DEADZONE_DB_NAME") ||
-           std::getenv("DEADZONE_OFFLINE_AUTH");
+           std::getenv("DEADZONE_DB_NAME");
 }
 
 bool isUdpPortInUse(uint16_t port) {
@@ -48,16 +47,14 @@ void autoStartLocalServer(const char* host, uint16_t port) {
         return;
     }
 
-    char command[512];
-    if (hasServerEnv()) {
-        std::snprintf(command, sizeof(command),
-                      "nohup ./DeadZoneServer %u > server.log 2>&1 &",
-                      port);
-    } else {
-        std::snprintf(command, sizeof(command),
-                      "DEADZONE_OFFLINE_AUTH=1 nohup ./DeadZoneServer %u > server.log 2>&1 &",
-                      port);
+    if (!hasServerEnv()) {
+        DZ_LOG_WARN("DB environment is not set; local server auth will be disabled. Run run_server.sh or scripts/setup_database.sh first.");
     }
+
+    char command[512];
+    std::snprintf(command, sizeof(command),
+                  "nohup ./DeadZoneServer %u > server.log 2>&1 &",
+                  port);
 
     DZ_LOG_INFO("Auto-starting local server on UDP %u", port);
     if (std::system(command) != 0) {
