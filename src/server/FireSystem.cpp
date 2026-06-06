@@ -15,17 +15,34 @@ static const std::array<std::pair<int,int>, 4> NEIGHBORS = {{
     {1,0},{-1,0},{0,1},{0,-1}
 }};
 
-void FireSystem::igniteTile(int16_t tx, int16_t ty) {
+void FireSystem::igniteTile(int16_t tx, int16_t ty,
+                            float ttl, float dps, bool canSpread) {
     uint32_t key = fireTileKey(tx, ty);
-    if (m_tileSet.count(key)) return; // already burning
+    if (m_tileSet.count(key)) {
+        for (auto& tile : m_tiles) {
+            if (tile.tx != tx || tile.ty != ty) continue;
+            tile.ttl = std::max(tile.ttl, ttl);
+            tile.dps = std::max(tile.dps, dps);
+            if (canSpread && !tile.canSpread) {
+                tile.canSpread = true;
+                m_frontier.push_back({tx, ty});
+            }
+            break;
+        }
+        return;
+    }
     m_tileSet.insert(key);
-    m_tiles.push_back({tx, ty, FIRE_TILE_TTL});
-    m_frontier.push_back({tx, ty});
+    m_tiles.push_back({tx, ty, ttl, dps, canSpread});
+    if (canSpread) {
+        m_frontier.push_back({tx, ty});
+    }
 }
 
-void FireSystem::igniteAtWorld(float wx, float wy) {
+void FireSystem::igniteAtWorld(float wx, float wy,
+                               float ttl, float dps, bool canSpread) {
     igniteTile(static_cast<int16_t>(TileMap::worldToTile(wx)),
-               static_cast<int16_t>(TileMap::worldToTile(wy)));
+               static_cast<int16_t>(TileMap::worldToTile(wy)),
+               ttl, dps, canSpread);
 }
 
 void FireSystem::reset() {
@@ -99,6 +116,15 @@ void FireSystem::spreadBFS(World& world, TileMap& map) {
     }
 }
 
+float FireSystem::tileDps(int16_t tx, int16_t ty) const noexcept {
+    for (const auto& tile : m_tiles) {
+        if (tile.tx == tx && tile.ty == ty) {
+            return tile.dps;
+        }
+    }
+    return 0.0f;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // checkBuildingContact — fire hits an occupied tile → destroy/explode building
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,8 +181,8 @@ void FireSystem::applyEntityDamage(World& world, const TileMap& /*map*/, float d
         int16_t tx = static_cast<int16_t>(TileMap::worldToTile(xf.x));
         int16_t ty = static_cast<int16_t>(TileMap::worldToTile(xf.y));
 
-        bool onFire = false;
-        for (int ox = -1; ox <= 1 && !onFire; ++ox) {
+        float fireDps = 0.0f;
+        for (int ox = -1; ox <= 1; ++ox) {
             for (int oy = -1; oy <= 1; ++oy) {
                 const int16_t ntx = static_cast<int16_t>(tx + ox);
                 const int16_t nty = static_cast<int16_t>(ty + oy);
@@ -166,16 +192,19 @@ void FireSystem::applyEntityDamage(World& world, const TileMap& /*map*/, float d
                 const float dx = xf.x - cx;
                 const float dy = xf.y - cy;
                 if (dx * dx + dy * dy <= (TILE_SIZE * 0.95f) * (TILE_SIZE * 0.95f)) {
-                    onFire = true;
-                    break;
+                    fireDps = std::max(fireDps, tileDps(ntx, nty));
                 }
             }
         }
-        if (onFire && !cbt->isOnFire) {
-            cbt->isOnFire        = true;
-            cbt->fireDamageTimer = 0.0f;
-        } else if (!onFire) {
+        if (fireDps > 0.0f) {
+            if (!cbt->isOnFire) {
+                cbt->fireDamageTimer = 0.0f;
+            }
+            cbt->isOnFire = true;
+            cbt->fireDps  = fireDps;
+        } else {
             cbt->isOnFire = false;
+            cbt->fireDps  = 0.0f;
         }
     }
 }

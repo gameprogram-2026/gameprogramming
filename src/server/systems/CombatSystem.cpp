@@ -69,12 +69,11 @@ void CombatSystem::tickBleeding(World& world, float dt) {
 
 void CombatSystem::tickFireDamage(World& world, float dt) {
     constexpr float FIRE_TICK_INTERVAL = 0.5f;
-    constexpr float FIRE_DPS           = 15.0f;
 
     auto& cbtPool = world.pool<CombatComponent>();
     for (size_t i = 0; i < cbtPool.owners().size(); ++i) {
         auto& cbt = cbtPool.data()[i];
-        if (!cbt.isOnFire) continue;
+        if (!cbt.isOnFire || cbt.fireDps <= 0.0f) continue;
 
         Entity e{cbtPool.owners()[i]};
         auto* hp = world.tryGet<HealthComponent>(e);
@@ -83,9 +82,19 @@ void CombatSystem::tickFireDamage(World& world, float dt) {
         cbt.fireDamageTimer += dt;
         if (cbt.fireDamageTimer >= FIRE_TICK_INTERVAL) {
             cbt.fireDamageTimer -= FIRE_TICK_INTERVAL;
-            hp->applyDamage(FIRE_DPS * FIRE_TICK_INTERVAL, DamageType::Fire);
-            if (!hp->isAlive && m_onDeath)
+            const float dealt = hp->applyDamage(cbt.fireDps * FIRE_TICK_INTERVAL, DamageType::Fire);
+            if (dealt > 0.0f && m_onDamage) {
+                DamageResult result{};
+                result.victimID = e.id;
+                result.damage = dealt;
+                result.remainingHp = hp->currentHp;
+                result.type = DamageType::Fire;
+                result.killed = !hp->isAlive;
+                m_onDamage(result);
+            }
+            if (!hp->isAlive && m_onDeath) {
                 m_onDeath(e, Entity{NULL_ENTITY}, DamageType::Fire);
+            }
         }
     }
 }

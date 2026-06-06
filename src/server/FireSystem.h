@@ -12,6 +12,8 @@ namespace dz {
 constexpr float FIRE_SPREAD_INTERVAL = 0.5f;  ///< BFS wave every 0.5 s
 constexpr float FIRE_TILE_TTL        = 10.0f; ///< Tile burns for 10 s
 constexpr float FIRE_DPS             = 15.0f; ///< HP/s while on burning tile
+constexpr float FLAMETHROWER_FIRE_TTL = 3.0f; ///< Short-lived sprayed flame
+constexpr float FLAMETHROWER_FIRE_DPS = 6.0f; ///< HP/s for sprayed flame tiles
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FireTile — one burning cell
@@ -19,6 +21,8 @@ constexpr float FIRE_DPS             = 15.0f; ///< HP/s while on burning tile
 struct FireTile {
     int16_t tx, ty;
     float   ttl;
+    float   dps;
+    bool    canSpread;
 };
 
 inline uint32_t fireTileKey(int16_t x, int16_t y) noexcept {
@@ -41,8 +45,14 @@ public:
 
     void onDestroyBuilding(DestroyBuildingCB cb) { m_onDestroy = std::move(cb); }
 
-    void igniteTile(int16_t tx, int16_t ty);
-    void igniteAtWorld(float wx, float wy);   ///< Convenience: converts to tile
+    void igniteTile(int16_t tx, int16_t ty,
+                    float ttl = FIRE_TILE_TTL,
+                    float dps = FIRE_DPS,
+                    bool canSpread = true);
+    void igniteAtWorld(float wx, float wy,
+                       float ttl = FIRE_TILE_TTL,
+                       float dps = FIRE_DPS,
+                       bool canSpread = true);   ///< Convenience: converts to tile
 
     void update(World& world, TileMap& map, float dt);
     void reset();
@@ -57,6 +67,7 @@ private:
     void spreadBFS(World& world, TileMap& map);
     void applyEntityDamage(World& world, const TileMap& map, float dt);
     void checkBuildingContact(World& world, TileMap& map, int16_t tx, int16_t ty);
+    float tileDps(int16_t tx, int16_t ty) const noexcept;
 
     std::vector<FireTile>          m_tiles;
     std::unordered_set<uint32_t>   m_tileSet;

@@ -8,11 +8,11 @@ constexpr int PISTOL_MAG_CAPACITY = 9;
 // ─────────────────────────────────────────────────────────────────────────────
 // Noise radii in world units (pixels). 1 tile = 32 px ≈ 1 metre.
 // ─────────────────────────────────────────────────────────────────────────────
-constexpr float NOISE_WALK_RADIUS   =  48.0f;  // 1.5 m
-constexpr float NOISE_RUN_RADIUS    = 160.0f;  // 5.0 m
-constexpr float NOISE_MELEE_RADIUS  = 256.0f;  // 8.0 m
-constexpr float NOISE_PISTOL_RADIUS = 400.0f;  // 12.5 m
-constexpr float NOISE_RIFLE_RADIUS  = 560.0f;  // 17.5 m
+constexpr float NOISE_WALK_RADIUS   =  80.0f;  // 2.5 m
+constexpr float NOISE_RUN_RADIUS    = 240.0f;  // 7.5 m
+constexpr float NOISE_MELEE_RADIUS  = 288.0f;  // 9.0 m
+constexpr float NOISE_PISTOL_RADIUS = 480.0f;  // 15.0 m
+constexpr float NOISE_RIFLE_RADIUS  = 680.0f;  // 21.25 m
 constexpr float NOISE_EXPLOSION_RADIUS=1600.0f;// 50.0 m — triggers Frenzy
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +57,7 @@ struct CombatComponent {
     // ── On-fire status effect ─────────────────────────────────────────────────
     bool  isOnFire          = false;
     float fireDamageTimer   = 0.0f;   ///< Time since last fire tick
+    float fireDps           = 0.0f;   ///< Current burning tile damage per second
 
     // ── Knockback ─────────────────────────────────────────────────────────────
     float knockVx = 0.0f;

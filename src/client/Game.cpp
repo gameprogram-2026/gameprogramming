@@ -1221,6 +1221,15 @@ void Game::processEvents() {
     }
     prevR = curR;
 
+    static bool prevB = false;
+    bool curB = m_input.isKeyDown(SDL_SCANCODE_B);
+    if (curB && !prevB && m_buildMode) {
+        m_buildMode = false;
+        m_notifyMsg = "건설 취소";
+        m_notifyTimer = 1.5f;
+    }
+    prevB = curB;
+
     if (curZ && !prevZ) enterBuild(0);
     if (curX && !prevX) enterBuild(1);
     if (curC && !prevC) enterBuild(2);

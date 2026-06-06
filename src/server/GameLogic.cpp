@@ -179,15 +179,18 @@ void GameLogic::handleFlamethrowerBurst(uint32_t ownerID, float aimAngle) {
 
     const float sideX = dirY;
     const float sideY = -dirX;
-    for (float dist : {40.0f, 72.0f, 104.0f, 136.0f, 168.0f}) {
+    for (float dist : {44.0f, 82.0f, 120.0f, 158.0f}) {
         const float spread = 10.0f + dist * 0.18f;
         for (float side : {-spread, 0.0f, spread}) {
             m_fire.igniteAtWorld(xf->x + dirX * dist + sideX * side,
-                                 xf->y + dirY * dist + sideY * side);
+                                 xf->y + dirY * dist + sideY * side,
+                                 FLAMETHROWER_FIRE_TTL,
+                                 FLAMETHROWER_FIRE_DPS,
+                                 false);
         }
     }
 
-    cbt->fireCooldown = 0.25f;
+    cbt->fireCooldown = 0.35f;
     cbt->emitNoise(NOISE_RUN_RADIUS, 3);
 }
 

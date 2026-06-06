@@ -104,7 +104,7 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
             auto* ncbt = world.tryGet<CombatComponent>(nearest);
             if (nxf) {
                 float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
-                float sightMult = isNight ? 3.0f : 0.4f;
+                float sightMult = isNight ? 2.4f : 0.9f;
                 // 출혈 중인 대상은 반경 2배로 멀리서도 냄새로 감지
                 if (ncbt && ncbt->isBleeding) sightMult *= 2.0f;
                 
@@ -277,9 +277,9 @@ void ZombieAISystem::updateFSM(World& world, Entity zombie,
         if (nearest.isValid()) {
             auto* nxf = world.tryGet<TransformComponent>(nearest);
             if (nxf) {
-                // 밤: 700픽셀(22타일) 내 플레이어 무조건 타겟팅
+                // 밤: 950픽셀(약 30타일) 내 플레이어 무조건 타겟팅
                 float dx = nxf->x - xf->x, dy = nxf->y - xf->y;
-                if (dx*dx + dy*dy < 700.0f * 700.0f) {
+                if (dx*dx + dy*dy < 950.0f * 950.0f) {
                     ai.targetX = nxf->x;
                     ai.targetY = nxf->y;
                     ai.state = ZombieState::Frenzy;

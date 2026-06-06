@@ -16,7 +16,7 @@ namespace dz {
 //   ▲                     │                     │                           │
 //   └─────silence 10s─────┘       silence 8s ───┘       30s timeout ───────┘
 //
-// Frenzy: 20-metre chain aggro — activates Frenzy on all nearby zombies.
+// Frenzy: chain aggro activates Frenzy on nearby zombies.
 // ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 // ZombieType — 3종 (기획서 3.2)
@@ -35,9 +35,9 @@ enum class ZombieState : uint8_t {
     Dead    = 4,
 };
 
-constexpr float ZOMBIE_HEARING_RADIUS   = 384.0f; ///< 12 tiles base hearing range
-constexpr float ZOMBIE_FRENZY_CHAIN_R   = 320.0f; ///< 10 m chain aggro radius
-constexpr float ZOMBIE_SIGHT_RADIUS     = 320.0f; ///< 10 tiles line-of-sight range
+constexpr float ZOMBIE_HEARING_RADIUS   = 512.0f; ///< 16 tiles base hearing range
+constexpr float ZOMBIE_FRENZY_CHAIN_R   = 416.0f; ///< 13 m chain aggro radius
+constexpr float ZOMBIE_SIGHT_RADIUS     = 448.0f; ///< 14 tiles line-of-sight range
 constexpr float ZOMBIE_ATTACK_RADIUS    =  20.0f; ///< Melee reach: player/zombie collision boxes must touch
 
 // Shambler (default)

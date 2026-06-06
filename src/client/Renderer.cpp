@@ -64,6 +64,45 @@ static std::string utf8Prefix(const std::string& text, size_t maxCodepoints) {
     return text.substr(0, bytePos);
 }
 
+struct DistrictView {
+    int x = 0, y = 0, w = 0, h = 0;
+    int theme = 0;
+    std::string label;
+    std::string shortLabel;
+};
+
+static std::vector<DistrictView> districtViews(const TileMap& map) {
+    std::vector<DistrictView> out;
+    const auto& districts = map.getDistricts();
+    if (!districts.empty()) {
+        out.reserve(districts.size());
+        for (const auto& d : districts) {
+            std::string label = d.label.empty() ? d.key : d.label;
+            if (label.empty()) {
+                switch (d.theme) {
+                    case 0: label = "주거 구역"; break;
+                    case 1: label = "상업 구역"; break;
+                    case 2: label = "공업 구역"; break;
+                    case 3: label = "군사 구역"; break;
+                    default: label = "미확인 구역"; break;
+                }
+            }
+            out.push_back({d.x, d.y, d.w, d.h, d.theme, label, utf8Prefix(label, 2)});
+        }
+        return out;
+    }
+
+    const int halfW = std::max(1, map.width() / 2);
+    const int halfH = std::max(1, map.height() / 2);
+    const int eastW = std::max(1, map.width() - halfW);
+    const int southH = std::max(1, map.height() - halfH);
+    out.push_back({0,     0,     halfW, halfH, 0, "주거 구역", "주거"});
+    out.push_back({halfW, 0,     eastW, halfH, 1, "상업 구역", "상업"});
+    out.push_back({0,     halfH, halfW, southH, 3, "군사 구역", "군사"});
+    out.push_back({halfW, halfH, eastW, southH, 2, "공업 구역", "공업"});
+    return out;
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 건물 정의 — 대형 + 다중 문 (데드타운 스타일)
@@ -438,9 +477,8 @@ void Renderer::drawLobby(int mouseX, int mouseY,
     SDL_RenderFillRect(m_renderer, &btmBar);
     SDL_SetRenderDrawColor(m_renderer, 35, 42, 58, 200);
     SDL_RenderDrawLine(m_renderer, 0, H - 40, W, H - 40);
-    drawText(
-        "WASD: 이동   SHIFT: 질주   CTRL: 웅크리기   LMB: 공격   F: 파밍   I: 인벤토리   M: 지도",
-        W / 2, H - 25, Col::TEXT_LO, fSm, true);
+    drawText("WASD 이동 | Shift 질주 | Ctrl 웅크리기 | LMB 공격 | F 상호작용 | I 인벤 | M 지도",
+             W / 2, H - 25, Col::TEXT_LO, fSm, true);
 
     // ── 비네트 효과 ───────────────────────────────────────────────────────────
     for (int i = 0; i < 100; ++i) {
@@ -733,14 +771,14 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
     int baseX = static_cast<int>(std::round((minTX * TILE_SIZE - cam.x) * cam.zoom + m_screenW * 0.5f));
     int baseY = static_cast<int>(std::round((minTY * TILE_SIZE - cam.y) * cam.zoom + m_screenH * 0.5f));
 
-    // 구역 경계: 200×200 맵을 4분할 (NW=주거, NE=공업, SW=군사, SE=상업)
+    // 구역 경계: 200×200 맵을 4분할 (NW=주거, NE=상업, SW=군사, SE=공업)
     const int HALF = map.width() / 2; // 100
 
     for (int ty = minTY; ty <= maxTY; ++ty) {
         for (int tx = minTX; tx <= maxTX; ++tx) {
             const Tile& tile = map.at(tx, ty);
 
-            // 구역 판별 (0=NW주거 1=NE공업 2=SW군사 3=SE상업)
+            // 구역 판별 (0=NW주거 1=NE상업 2=SW군사 3=SE공업)
             int zone = (tx >= HALF ? 1 : 0) + (ty >= HALF ? 2 : 0);
 
             const char* texKey = nullptr;
@@ -749,9 +787,9 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
                     // 구역마다 단일 잔디 텍스처 — 무작위 혼합 없음
                     static const char* zoneGrass[] = {
                         "tile_grass_1",   // NW 주거: 밝은 초록
-                        "tile_grass_3",   // NE 공업: 말라가는 잔디
+                        "tile_grass_3",   // NE 상업: 말라가는 잔디
                         "tile_grass_3",   // SW 군사: 메마른 올리브
-                        "tile_concrete",  // SE 상업: 콘크리트
+                        "tile_concrete",  // SE 공업: 콘크리트
                     };
                     texKey = zoneGrass[zone];
                     break;
@@ -792,7 +830,7 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
     }
 
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
-    for (const auto& d : map.getDistricts()) {
+    for (const auto& d : districtViews(map)) {
         int sx1, sy1, sx2, sy2;
         cam.worldToScreen(d.x * TILE_SIZE, d.y * TILE_SIZE, sx1, sy1);
         cam.worldToScreen((d.x + d.w) * TILE_SIZE, (d.y + d.h) * TILE_SIZE, sx2, sy2);
@@ -807,14 +845,17 @@ void Renderer::drawTileMap(const TileMap& map, const Camera& cam, float localX, 
         SDL_SetRenderDrawColor(m_renderer, border.r, border.g, border.b, border.a);
         SDL_RenderDrawRect(m_renderer, &z);
 
-        if (z.w > 70 && z.h > 46) {
-            const std::string label = d.label.empty() ? d.key : d.label;
-            const int lx = sx1 + z.w / 2;
-            const int ly = sy1 + std::max(10, z.h / 10);
-            const int panelW = std::min(128, std::max(74, z.w - 16));
+        const int ix1 = std::max(0, sx1);
+        const int iy1 = std::max(0, sy1);
+        const int ix2 = std::min(m_screenW, sx2);
+        const int iy2 = std::min(m_screenH, sy2);
+        if (ix2 - ix1 > 110 && iy2 - iy1 > 70) {
+            const int lx = (ix1 + ix2) / 2;
+            const int ly = std::max(34, iy1 + 28);
+            const int panelW = std::min(156, std::max(88, ix2 - ix1 - 28));
             drawPanel(lx - panelW / 2, ly - 5, panelW, 24,
                       {8, 10, 14, 105}, districtColor(d.theme, 150), 1);
-            drawTextShadow(label, lx, ly,
+            drawTextShadow(d.label, lx, ly,
                            {245, 246, 232, 215}, {0, 0, 0, 180},
                            m_fonts.get(13), true);
         }
@@ -1335,32 +1376,88 @@ void Renderer::drawExtractionZones(const Camera& cam,
                                     bool open) {
     float t = SDL_GetTicks()*0.001f;
     TTF_Font* fSm = m_fonts.get(12);
+    auto drawCircleOutline = [&](int cx, int cy, int r, SDL_Color col, int step = 3) {
+        SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
+        for (int ang = 0; ang < 360; ang += step) {
+            float a0 = ang * 3.14159265f / 180.0f;
+            float a1 = (ang + step) * 3.14159265f / 180.0f;
+            SDL_RenderDrawLine(m_renderer,
+                cx + static_cast<int>(std::cos(a0) * r),
+                cy + static_cast<int>(std::sin(a0) * r),
+                cx + static_cast<int>(std::cos(a1) * r),
+                cy + static_cast<int>(std::sin(a1) * r));
+        }
+    };
+    auto drawManholeCover = [&](int cx, int cy, int r, uint8_t alpha, bool active) {
+        SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+        drawFilledCircle(cx + std::max(2, r / 12), cy + std::max(2, r / 10), r, {0, 0, 0, static_cast<uint8_t>(alpha / 3)});
+        drawFilledCircle(cx, cy, r, {48, 52, 56, alpha});
+        drawFilledCircle(cx - r / 8, cy - r / 8, std::max(1, r - r / 5), {78, 82, 86, static_cast<uint8_t>(alpha * 9 / 10)});
+        drawFilledCircle(cx + r / 10, cy + r / 10, std::max(1, r - r / 4), {38, 42, 47, static_cast<uint8_t>(alpha * 9 / 10)});
+
+        drawCircleOutline(cx, cy, r, {18, 20, 23, alpha}, 2);
+        drawCircleOutline(cx, cy, std::max(1, r - r / 7), {128, 134, 138, static_cast<uint8_t>(alpha * 3 / 4)}, 3);
+        drawCircleOutline(cx, cy, std::max(1, r - r / 3), {24, 26, 30, static_cast<uint8_t>(alpha * 4 / 5)}, 3);
+        drawCircleOutline(cx, cy, std::max(1, r / 3), {110, 116, 120, static_cast<uint8_t>(alpha * 2 / 3)}, 4);
+
+        SDL_SetRenderDrawColor(m_renderer, 28, 30, 34, static_cast<uint8_t>(alpha * 3 / 4));
+        const int ribCount = 12;
+        for (int i = 0; i < ribCount; ++i) {
+            float a = (i * 360.0f / ribCount) * 3.14159265f / 180.0f;
+            int x0 = cx + static_cast<int>(std::cos(a) * r * 0.34f);
+            int y0 = cy + static_cast<int>(std::sin(a) * r * 0.34f);
+            int x1 = cx + static_cast<int>(std::cos(a) * r * 0.78f);
+            int y1 = cy + static_cast<int>(std::sin(a) * r * 0.78f);
+            SDL_RenderDrawLine(m_renderer, x0, y0, x1, y1);
+        }
+
+        SDL_SetRenderDrawColor(m_renderer, 18, 20, 24, static_cast<uint8_t>(alpha * 2 / 3));
+        int grooveStep = std::max(6, r / 4);
+        for (int off = -r + grooveStep; off <= r - grooveStep; off += grooveStep) {
+            int chord = static_cast<int>(std::sqrt(std::max(0, r * r - off * off)));
+            SDL_RenderDrawLine(m_renderer, cx - chord, cy + off, cx + chord, cy + off);
+        }
+
+        for (int i = 0; i < 8; ++i) {
+            float a = (i * 45.0f + 22.5f) * 3.14159265f / 180.0f;
+            int bx = cx + static_cast<int>(std::cos(a) * r * 0.68f);
+            int by = cy + static_cast<int>(std::sin(a) * r * 0.68f);
+            drawFilledCircle(bx, by, std::max(2, r / 13), {18, 20, 22, static_cast<uint8_t>(alpha * 3 / 4)});
+            drawFilledCircle(bx - 1, by - 1, std::max(1, r / 20), {124, 128, 130, static_cast<uint8_t>(alpha * 2 / 3)});
+        }
+
+        SDL_Rect handleShadow = {cx - r / 4 + 1, cy - r / 12 + 1, r / 2, std::max(3, r / 6)};
+        SDL_Rect handle = {cx - r / 4, cy - r / 12, r / 2, std::max(3, r / 6)};
+        SDL_SetRenderDrawColor(m_renderer, 15, 17, 20, static_cast<uint8_t>(alpha * 2 / 3));
+        SDL_RenderFillRect(m_renderer, &handleShadow);
+        SDL_SetRenderDrawColor(m_renderer, 92, 96, 100, static_cast<uint8_t>(alpha * 4 / 5));
+        SDL_RenderDrawRect(m_renderer, &handle);
+
+        if (active) {
+            drawCircleOutline(cx, cy, std::max(1, r + 3), {80, 205, 255, 120}, 3);
+        }
+    };
+
     for (auto [wx,wy] : zones) {
         int sx, sy;
         cam.worldToScreen(wx, wy, sx, sy);
-        int sr = static_cast<int>(48.0f*cam.zoom); // 맨홀 크기
+        int sr = std::max(14, static_cast<int>(48.0f*cam.zoom)); // 맨홀 크기
 
         if (open) {
-            // 맨홀 바닥 (어두운 회색)
-            drawFilledCircle(sx, sy, sr, {40, 40, 45, 200});
-            // 맨홀 테두리
-            SDL_SetRenderDrawColor(m_renderer, 80, 80, 90, 255);
-            for (int ang = 0; ang < 360; ang += 2) {
-                float r = ang * 3.14159f / 180.0f;
-                SDL_RenderDrawPoint(m_renderer,
-                    sx + static_cast<int>(std::cos(r)*sr),
-                    sy + static_cast<int>(std::sin(r)*sr));
-            }
-            // 맨홀 격자 무늬
-            for (int i = -sr + 10; i < sr - 10; i += 12) {
-                int chord = static_cast<int>(std::sqrt(sr*sr - i*i));
-                SDL_RenderDrawLine(m_renderer, sx + i, sy - chord, sx + i, sy + chord);
-                SDL_RenderDrawLine(m_renderer, sx - chord, sy + i, sx + chord, sy + i);
-            }
+            drawFilledCircle(sx, sy, sr + 5, {8, 9, 11, 210});
+            drawFilledCircle(sx, sy, sr, {18, 20, 24, 245});
+            drawFilledCircle(sx - sr / 5, sy - sr / 5, std::max(1, sr * 2 / 3), {0, 0, 0, 230});
+            drawCircleOutline(sx, sy, sr + 2, {125, 132, 138, 230}, 2);
+            drawCircleOutline(sx, sy, sr - sr / 6, {44, 48, 54, 210}, 3);
+
+            int coverX = sx + static_cast<int>(sr * 0.72f);
+            int coverY = sy + static_cast<int>(sr * 0.34f);
+            drawManholeCover(coverX, coverY, std::max(10, sr * 3 / 5), 210, true);
 
             // 활성화 표시 (은은한 푸른빛 펄스)
             float pulse = std::sin(t*3.0f)*0.5f + 0.5f;
-            drawFilledCircle(sx, sy, static_cast<int>(sr * 0.8f), {100, 200, 255, static_cast<uint8_t>(30 + pulse*30)});
+            drawFilledCircle(sx, sy, static_cast<int>(sr * 0.75f), {80, 200, 255, static_cast<uint8_t>(24 + pulse*36)});
 
             // 텍스트 안내
             drawText("맨홀 (탈출구)", sx, sy - sr - 22, {150, 220, 255, 255}, fSm, true);
@@ -1368,15 +1465,11 @@ void Renderer::drawExtractionZones(const Camera& cam,
             drawText("5초간 대기", sx, sy + sr + 8, {200, 200, 200, 200}, fSm, true);
         } else {
             float pulse = std::sin(t)*0.5f+0.5f;
-            drawFilledCircle(sx,sy,sr,{60,60,70,static_cast<uint8_t>(25+pulse*15)});
-            SDL_SetRenderDrawColor(m_renderer, 80,80,95,90);
-            for (int ang=0;ang<360;ang+=5) {
-                float r=ang*3.14159f/180.0f;
-                SDL_RenderDrawPoint(m_renderer,
-                    sx+static_cast<int>(std::cos(r)*sr),
-                    sy+static_cast<int>(std::sin(r)*sr));
-            }
-            drawText("LOCKED", sx, sy-sr-18, {80,80,100,170}, fSm, true);
+            drawManholeCover(sx, sy, sr, static_cast<uint8_t>(150 + pulse * 35), false);
+            SDL_SetRenderDrawColor(m_renderer, 30, 34, 40, 130);
+            SDL_RenderDrawLine(m_renderer, sx - sr / 2, sy - sr / 2, sx + sr / 2, sy + sr / 2);
+            SDL_RenderDrawLine(m_renderer, sx + sr / 2, sy - sr / 2, sx - sr / 2, sy + sr / 2);
+            drawText("LOCKED", sx, sy-sr-18, {92,96,110,190}, fSm, true);
         }
     }
 }
@@ -2576,13 +2669,47 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
     }
 
     // ══════════════════════════════════════════════════════════════
-    // 하단 중앙 상태 힌트 (인벤토리 키 등)
+    // 하단 중앙 조작 힌트 — 키캡형으로 짧게 고정
     // ══════════════════════════════════════════════════════════════
     {
-        const int HY = m_screenH - 18;
-        drawText("[I] 인벤토리", m_screenW / 2 - 160, HY, Col::TEXT_LO, fTiny);
-        drawText("[F] 상호작용", m_screenW / 2 - 40,  HY, Col::TEXT_LO, fTiny);
-        drawText("[M] 지도",     m_screenW / 2 + 80,  HY, Col::TEXT_LO, fTiny);
+        const bool compact = m_screenW < 1050;
+        const int PW = compact ? 430 : 560;
+        const int PH = 44;
+        const int PX = m_screenW / 2 - PW / 2;
+        const int PY = m_screenH - 136;
+        drawPanel(PX, PY, PW, PH, {7, 10, 16, 185}, {35, 44, 62, 180}, 1);
+
+        auto drawKeyHint = [&](int x, int y, const char* key, const char* label, SDL_Color accent) {
+            int kw = std::max(24, static_cast<int>(std::strlen(key)) * 8 + 12);
+            int lw = 0;
+            TTF_SizeUTF8(fTiny, label, &lw, nullptr);
+            SDL_Rect keyRect = {x, y, kw, 18};
+            SDL_SetRenderDrawColor(m_renderer, accent.r, accent.g, accent.b, 55);
+            SDL_RenderFillRect(m_renderer, &keyRect);
+            SDL_SetRenderDrawColor(m_renderer, accent.r, accent.g, accent.b, 180);
+            SDL_RenderDrawRect(m_renderer, &keyRect);
+            drawText(key, x + kw / 2, y + 2, accent, fTiny, true);
+            drawText(label, x + kw + 6, y + 2, Col::TEXT_LO, fTiny);
+            return kw + 6 + lw + 12;
+        };
+
+        int x = PX + 12;
+        int y = PY + 6;
+        x += drawKeyHint(x, y, "I", "인벤", {85, 165, 255, 230});
+        x += drawKeyHint(x, y, "F", "상호작용", {90, 220, 120, 230});
+        x += drawKeyHint(x, y, "M", "지도", {180, 170, 255, 230});
+        if (!compact) {
+            x += drawKeyHint(x, y, "RMB", "조준", {220, 190, 90, 230});
+        }
+
+        x = PX + 12;
+        y = PY + 25;
+        x += drawKeyHint(x, y, "Z", "바리케이드", {220, 165, 90, 230});
+        x += drawKeyHint(x, y, "X", "포탑", {95, 180, 235, 230});
+        x += drawKeyHint(x, y, "C", "제작대", {230, 205, 95, 230});
+        if (!compact) {
+            drawKeyHint(x, y, "V", "건설전환", {180, 200, 220, 230});
+        }
     }
 }
 
@@ -2715,11 +2842,13 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
 
         // ── 사용 안내 ─────────────────────────────────────────────────────────────
         int tipY = wbY + 70;
-        drawPanel(eqX, tipY, slotW, 88, {12,15,24,220}, {30,38,55,255}, 1);
-        drawText("단축키 안내", eqX+8, tipY+6, Col::TEXT_LO, m_fonts.get(11));
-        drawText("[1] 주무기 선택", eqX+8, tipY+20, {80,160,255,200}, m_fonts.get(11));
-        drawText("[2-5] 소모품 사용", eqX+8, tipY+33, {80,220,120,200}, m_fonts.get(11));
-        drawText("밖으로 드래그: 버리기", eqX+8, tipY+72, {180,180,180,180}, m_fonts.get(11));
+        drawPanel(eqX, tipY, slotW, 104, {12,15,24,220}, {30,38,55,255}, 1);
+        drawText("빠른 조작", eqX+8, tipY+6, Col::TEXT_LO, m_fonts.get(11));
+        drawText("1/2: 무기 선택", eqX+8, tipY+22, {80,160,255,220}, m_fonts.get(11));
+        drawText("3-5: 소모품 사용", eqX+8, tipY+36, {80,220,120,220}, m_fonts.get(11));
+        drawText("Z/X/C: 건설 진입", eqX+8, tipY+50, {230,190,90,220}, m_fonts.get(11));
+        drawText("우클릭 재료: 해당 건설", eqX+8, tipY+64, {180,190,210,210}, m_fonts.get(11));
+        drawText("밖으로 드래그: 버리기", eqX+8, tipY+82, {180,180,180,180}, m_fonts.get(11));
 
 
     // ── 우: 그리드 아이템 ────────────────────────────────────────────────────
@@ -2944,7 +3073,7 @@ void Renderer::drawInventory(const ClientInventory& inv, int mouseX, int mouseY,
     }
 
     // 하단: 슬롯 수 + 조작 안내
-    drawText("드래그 앤 드롭으로 아이템 이동  |  [I] 인벤토리 닫기",
+    drawText("드래그 이동 | 우클릭 재료: 건설 | I 닫기",
              panX+panW/2, panY+panH-22, Col::TEXT_LO, fSm, true);
 }
 
@@ -3313,6 +3442,36 @@ void Renderer::drawMinimap(const TileMap& map, const NetworkClient& net, float l
         py = MMY + MM/2 + static_cast<int>((wy - ly) / RADAR_RANGE * (MM/2));
     };
 
+    // 구역 색상 및 이름
+    for (const auto& d : districtViews(map)) {
+        int sx, sy, ex, ey;
+        toMM(d.x * TILE_SIZE, d.y * TILE_SIZE, sx, sy);
+        toMM((d.x + d.w) * TILE_SIZE, (d.y + d.h) * TILE_SIZE, ex, ey);
+        int rx1 = std::min(sx, ex);
+        int ry1 = std::min(sy, ey);
+        int rx2 = std::max(sx, ex);
+        int ry2 = std::max(sy, ey);
+        SDL_Rect dr = {rx1, ry1, std::max(1, rx2 - rx1), std::max(1, ry2 - ry1)};
+        SDL_Color fill = districtColor(d.theme, 34);
+        SDL_SetRenderDrawColor(m_renderer, fill.r, fill.g, fill.b, fill.a);
+        SDL_RenderFillRect(m_renderer, &dr);
+        SDL_Color line = districtColor(d.theme, 130);
+        SDL_SetRenderDrawColor(m_renderer, line.r, line.g, line.b, line.a);
+        SDL_RenderDrawRect(m_renderer, &dr);
+
+        const int ix1 = std::max(MMX, rx1);
+        const int iy1 = std::max(MMY, ry1);
+        const int ix2 = std::min(MMX + MM, rx2);
+        const int iy2 = std::min(MMY + MM, ry2);
+        if (ix2 - ix1 > 30 && iy2 - iy1 > 22) {
+            const int tx = (ix1 + ix2) / 2;
+            const int ty = (iy1 + iy2) / 2;
+            drawTextShadow(d.shortLabel, tx, ty,
+                           {236, 238, 220, 205}, {0, 0, 0, 190},
+                           m_fonts.get(11), true);
+        }
+    }
+
     // 건물 표시
     for (const auto& b : map.getBuildings()) {
         float bx = b.x * 32.0f, by_w = b.y * 32.0f;
@@ -3422,8 +3581,8 @@ void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float l
         py = Y + static_cast<int>((wy / MH) * H);
     };
 
-    for (const auto& z : map.getDistricts()) {
-        SDL_Color col = districtColor(z.theme, 55);
+    for (const auto& z : districtViews(map)) {
+        SDL_Color col = districtColor(z.theme, 58);
         SDL_SetRenderDrawColor(m_renderer, col.r, col.g, col.b, col.a);
         SDL_Rect zr = {
             X + static_cast<int>((z.x * TILE_SIZE / MW) * W),
@@ -3466,13 +3625,17 @@ void Renderer::drawFullMap(const TileMap& map, const NetworkClient& net, float l
     // ── 구역 이름 라벨 ───────────────────────────────────────────────────────
     TTF_Font* fLg = m_fonts.get(20);
     TTF_Font* fSm = m_fonts.get(12);
-    for (const auto& z : map.getDistricts()) {
+    for (const auto& z : districtViews(map)) {
         const float cx = (z.x + z.w * 0.5f) * TILE_SIZE;
         const float cy = (z.y + z.h * 0.5f) * TILE_SIZE;
-        drawText(z.label.empty() ? z.key : z.label,
-            X + static_cast<int>((cx / MW) * W),
-            Y + static_cast<int>((cy / MH) * H) - 10,
-            {220, 220, 220, 130}, fLg, true);
+        const int tx = X + static_cast<int>((cx / MW) * W);
+        const int ty = Y + static_cast<int>((cy / MH) * H) - 10;
+        const int panelW = 150;
+        drawPanel(tx - panelW / 2, ty - 17, panelW, 34,
+                  {5, 7, 12, 165}, districtColor(z.theme, 210), 2);
+        drawTextShadow(z.label, tx, ty,
+                       {248, 248, 232, 245}, {0, 0, 0, 220},
+                       fLg, true);
     }
 
     // ── 탈출 구역 표시 ────────────────────────────────────────────────────────
@@ -3707,20 +3870,45 @@ void Renderer::drawBuildModeOverlay(bool active, int buildType,
         SDL_RenderDrawLine(m_renderer, sx+sw-4, sy+4, sx+4, sy+sw-4);
     }
 
-    // ── 상단 건설 모드 배너 ─────────────────────────────────────────────────
+    // ── 상단 건설 모드 안내 ─────────────────────────────────────────────────
     static const char* typeNames[] = {"바리케이드", "포탑", "제작대", "문"};
     const char* typeName = (buildType >= 0 && buildType < 4) ? typeNames[buildType] : "?";
-    char buf[128];
-    std::snprintf(buf, sizeof(buf), "[ 건설 모드 ]  %s  —  클릭: 설치  |  V: 유형 전환  |  B: 취소",
-                  typeName);
+    const int panelW = std::min(560, std::max(360, m_screenW - 48));
+    const int panelH = buildType == static_cast<int>(BuildingType::Turret) ? 82 : 64;
+    const int panelX = m_screenW / 2 - panelW / 2;
+    const int panelY = 54;
+    drawPanel(panelX, panelY, panelW, panelH,
+              {8, 12, 20, 225}, {lineCol.r, lineCol.g, lineCol.b, 190}, 2);
 
-    SDL_SetRenderDrawColor(m_renderer, 8, 12, 20, 215);
-    SDL_Rect banner = {0, 54, m_screenW, 28};
-    SDL_RenderFillRect(m_renderer, &banner);
-    SDL_SetRenderDrawColor(m_renderer, lineCol.r, lineCol.g, lineCol.b, 180);
-    SDL_RenderDrawLine(m_renderer, 0, 82, m_screenW, 82);
+    char title[64];
+    std::snprintf(title, sizeof(title), "건설 모드: %s", typeName);
+    drawText(title, panelX + 14, panelY + 9, lineCol, f);
 
-    drawText(buf, m_screenW/2, 59, lineCol, f, true);
+    auto drawBuildKey = [&](int x, int y, const char* key, const char* label, SDL_Color accent) {
+        const int kw = std::max(24, static_cast<int>(std::strlen(key)) * 8 + 12);
+        int lw = 0;
+        TTF_SizeUTF8(fSm, label, &lw, nullptr);
+        SDL_Rect kr = {x, y, kw, 18};
+        SDL_SetRenderDrawColor(m_renderer, accent.r, accent.g, accent.b, 55);
+        SDL_RenderFillRect(m_renderer, &kr);
+        SDL_SetRenderDrawColor(m_renderer, accent.r, accent.g, accent.b, 180);
+        SDL_RenderDrawRect(m_renderer, &kr);
+        drawText(key, x + kw / 2, y + 2, accent, fSm, true);
+        drawText(label, x + kw + 6, y + 2, {200, 205, 210, 230}, fSm);
+        return kw + 6 + lw + 14;
+    };
+
+    int hx = panelX + 14;
+    int hy = panelY + 34;
+    hx += drawBuildKey(hx, hy, "LMB", canPlace ? "설치" : "설치불가", canPlace ? SDL_Color{90,220,120,230} : SDL_Color{240,80,60,230});
+    hx += drawBuildKey(hx, hy, "V", "유형전환", {180,200,220,230});
+    hx += drawBuildKey(hx, hy, "B/ESC", "취소", {230,110,90,230});
+    if (buildType == static_cast<int>(BuildingType::Turret)) {
+        drawBuildKey(panelX + 14, panelY + 56, "R", "포탑 방향 회전", {95,180,235,230});
+    } else {
+        drawText("Z 바리케이드  X 포탑  C 제작대  V로 문 선택",
+                 panelX + 14, panelY + 52, {130, 145, 160, 220}, fSm);
+    }
 }
 
 void Renderer::drawBuildRecipePanel(const ClientInventory& inv, int buildType) {
@@ -3758,7 +3946,8 @@ void Renderer::drawBuildRecipePanel(const ClientInventory& inv, int buildType) {
 
     drawPanel(x, y, W, H, {12,16,20,225}, {70,76,84,230}, 3);
     drawText("건설 조합법", x + PAD, y + 12, {240,240,230,255}, fTitle);
-    drawText("Z=바리케이드  X=포탑  C=제작대", x + W - PAD, y + 14, Col::TEXT_LO, fSm, true);
+    drawText("Z 바리케이드 | X 포탑 | C 제작대 | V 문",
+             x + W - PAD, y + 14, Col::TEXT_LO, fSm, true);
 
     int rowY = y + 42;
     for (int ri = 0; ri < BUILD_RECIPE_COUNT; ++ri) {
