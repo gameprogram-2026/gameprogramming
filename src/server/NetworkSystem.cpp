@@ -68,7 +68,7 @@ void NetworkSystem::pollEvents() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// broadcastSnapshot — serialize dirty entities into EntityStateRecord packets
+// broadcastSnapshot — serialize replicated entities into EntityStateRecord packets
 // ─────────────────────────────────────────────────────────────────────────────
 void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
     if (!m_host) return;

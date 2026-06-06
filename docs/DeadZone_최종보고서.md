@@ -30,7 +30,7 @@
 
 ### 2.2 핵심 메카닉
 1. **노이즈 시스템**: 총격, 발소리, 건설 등 플레이어의 행동마다 고유의 소음 반경(noiseRadius)이 발생하여, 주변 좀비들의 어그로를 끌게 됩니다.
-2. **연합 및 배신 시스템**: 타 팀과 핸드셰이크를 통해 임시 연합을 맺을 수 있으나, 언제든 아군 오인 사격(Friendly-fire)을 통해 배신할 수 있는 긴장감을 부여합니다.
+2. **연합 및 배신 시스템**: 타 팀과 핸드셰이크를 통해 임시 연합을 맺을 수 있으나, 동맹 팀을 공격하면 연합이 깨지는 배신 구조로 긴장감을 부여합니다.
 3. **건설 시스템**: 수집한 재료(고철, 판자, 전자 부품 등)를 활용하여 바리케이드와 포탑을 설치해 방어선을 구축할 수 있습니다.
 4. **탈출 시스템**: 게임 시작 5분(300초) 후 `map.json`에 지정된 4개의 탈출존이 활성화되며, 해당 구역에서 5초간 채널링(F키)을 유지하면 탈출에 성공합니다.
 5. **자동 포탑 시스템**: 건설한 포탑이 설정된 사격 호(Arc) 범위 내에서 가장 가까운 적을 자동으로 조준하여 사격합니다.
@@ -54,8 +54,8 @@
 
 ### 3.2 자체 구현 ECS (Entity Component System)
 - `World` 클래스를 중심으로 동작하며, `ComponentPool<T>`를 통해 메모리 연속성을 보장해 캐시 히트율을 높였습니다.
-- 총 9종의 컴포넌트(Transform, Inventory, Health, ZombieAI 등)가 분리되어 유연한 객체 관리가 가능합니다.
-- 지연 파괴(Deferred Destruction) 및 Dirty Flag 동기화 방식을 도입해 다중 스레드 환경 및 네트워크 전송을 최적화했습니다.
+- Transform, Inventory, Health, Combat, Network, Building, ZombieAI 등 역할별 컴포넌트를 분리하여 유연한 객체 관리가 가능합니다.
+- 지연 파괴(Deferred Destruction)를 도입해 시스템 순회 중 엔티티 삭제 안정성을 확보하고, Dirty Flag는 HP/인벤토리처럼 신뢰 채널로 별도 동기화해야 하는 상태를 선별 전송하는 데 활용했습니다.
 
 **[코드 스니펫: ComponentPool 메모리 구조]**
 ```cpp
@@ -116,7 +116,7 @@ struct EntityStateRecord {
 static_assert(sizeof(EntityStateRecord) == 17, "EntityStateRecord must be exactly 17 bytes");
 #pragma pack(pop)
 ```
-> **구현 설명**: 대역폭을 줄이기 위해 `#pragma pack(push, 1)`로 구조체 패딩을 제거했습니다. 클라이언트는 이동, 조준, 사격, 재장전, 상호작용 같은 입력을 `InputPacket` 하나로 압축해 전송하고, 서버는 이를 검증한 뒤 `EntityStateRecord` 배열 기반의 월드 스냅샷으로 좌표와 상태 플래그를 브로드캐스트합니다. 스냅샷 레코드는 17바이트로 고정되어 있으며, Fletcher-16 체크섬으로 손상된 레코드를 걸러냅니다. 이 외에도 데미지, 인벤토리, 건설, 문, 동맹, 탈출, 드랍 관련 패킷 타입을 분리하여 게임 내 상호작용을 처리합니다.
+> **구현 설명**: 대역폭을 줄이기 위해 `#pragma pack(push, 1)`로 구조체 패딩을 제거했습니다. 클라이언트는 이동, 조준, 사격, 재장전, 상호작용 같은 입력을 `InputPacket` 하나로 압축해 전송하고, 서버는 이를 검증한 뒤 `EntityStateRecord` 배열 기반의 월드 스냅샷으로 좌표와 상태 플래그를 브로드캐스트합니다. 스냅샷 레코드는 17바이트로 고정되어 있으며, Fletcher-16 체크섬으로 손상된 레코드를 걸러냅니다. 이 외에도 데미지, 인벤토리, 건설, 문, 동맹, 탈출, 드랍 관련 패킷 타입을 분리하여 게임 내 상호작용을 처리합니다. 화염 타일은 엔티티 ID를 가진 월드 오브젝트가 아니라 타일 좌표 집합이므로, 스냅샷 레코드에 억지로 섞지 않고 `S2C_FireUpdate` 전용 패킷으로 별도 동기화하여 서버의 화염 상태와 클라이언트 바닥 그래픽을 일치시켰습니다.
 
 **[코드 스니펫: 월드 스냅샷 최적화 브로드캐스팅 (NetworkSystem.cpp)]**
 ```cpp
@@ -128,25 +128,42 @@ void NetworkSystem::broadcastSnapshot(World& world, uint16_t tick) {
     auto* records = reinterpret_cast<EntityStateRecord*>(buf + sizeof(SnapshotHeader));
 
     int count = 0;
-    // 2. 네트워크 컴포넌트를 가진 모든 엔티티를 순회하며 Dirty 상태인 경우에만 직렬화
-    for (EntityID id : world.alive()) {
-        if (net->isDirty(DIRTY_TRANSFORM)) {
-            records[count].entityID = net->netID;
-            records[count].x = xf->x;
-            records[count].y = xf->y;
-            records[count].computeChecksum(); // 위변조 방지 체크섬 생성
-            ++count;
+    std::vector<EntityID> ordered = world.alive();
+    std::stable_sort(ordered.begin(), ordered.end(), priorityByType);
+
+    // 2. NetworkComponent를 가진 엔티티를 우선순위 순서로 직렬화
+    for (EntityID id : ordered) {
+        Entity e{id};
+        auto* net = world.tryGet<NetworkComponent>(e);
+        if (!net) continue;
+
+        auto* xf  = world.tryGet<TransformComponent>(e);
+        auto* hp  = world.tryGet<HealthComponent>(e);
+        auto* bld = world.tryGet<BuildingComponent>(e);
+
+        EntityStateRecord& rec = records[count++];
+        rec.recordType = bld ? REC_BUILDING : (!hp ? REC_LOOT :
+                         (hp->team == Team::Neutral ? REC_ZOMBIE : REC_PLAYER));
+        rec.entityID   = static_cast<uint16_t>(net->netID);
+        rec.x          = xf ? xf->x : 0.0f;
+        rec.y          = xf ? xf->y : 0.0f;
+        rec.computeChecksum();
+
+        if (count >= MAX_SNAPSHOT_ENTITIES) {
+            flushPacket();
         }
     }
     
     // 3. CHAN_UNRELIABLE(빠른 상태 전송)을 통해 접속 중인 모든 클라이언트에 전송
+    size_t totalLen = sizeof(SnapshotHeader) + count * sizeof(EntityStateRecord);
     ENetPacket* peerPkt = enet_packet_create(buf, totalLen, 0);
-    for (int i = 0; i < m_peerCount; ++i) {
-        enet_peer_send(m_peers[i].peer, CHAN_UNRELIABLE, peerPkt);
+    for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
+        if (!m_peers[pi].connected) continue;
+        enet_peer_send(m_peers[pi].peer, CHAN_UNRELIABLE, peerPkt);
     }
 }
 ```
-> **구현 설명**: 서버는 `NetworkComponent`를 가진 월드 엔티티를 스냅샷 레코드로 직렬화하고, 레코드 수가 `MAX_SNAPSHOT_ENTITIES`에 도달하면 패킷을 나누어 전송합니다. 각 클라이언트별로 자신의 엔티티 레코드에는 마지막으로 처리된 입력 시퀀스(`seqAck`)를 넣어 클라이언트 사이드 예측 보정에 사용합니다. `CHAN_UNRELIABLE` 채널을 이용해 좌표 업데이트는 최신성이 우선되도록 구성했습니다.
+> **구현 설명**: 서버는 `NetworkComponent`를 가진 월드 엔티티를 스냅샷 레코드로 직렬화하고, 레코드 수가 `MAX_SNAPSHOT_ENTITIES`에 도달하면 패킷을 나누어 전송합니다. 이때 건물, 플레이어, 루트, 좀비 순서로 우선순위를 두어 화면 구성에 중요한 오브젝트가 먼저 전송되도록 정렬합니다. 각 클라이언트별로 자신의 엔티티 레코드에는 마지막으로 처리된 입력 시퀀스(`seqAck`)를 넣어 클라이언트 사이드 예측 보정에 사용합니다. `CHAN_UNRELIABLE` 채널을 이용해 좌표 업데이트는 최신성이 우선되도록 구성했습니다.
 
 **[코드 스니펫: 클라이언트 사이드 예측 및 롤백 (NetworkClient.cpp)]**
 ```cpp
@@ -274,6 +291,42 @@ void ZombieAISystem::doMovement(World& world, Entity zombie, ZombieAIComponent& 
 ```
 > **구현 설명**: 좀비가 플레이어를 향해 이동할 때, 단순히 직선으로 쫓아오는 것을 넘어 **무리 지어 이동(Flocking)** 할 때 서로 겹쳐서 하나의 점처럼 뭉치지 않게 만드는 분리(Separation) 로직을 적용했습니다. 벽체와 충돌할 때는 자연스럽게 미끄러지도록 X/Y축을 분리하여 위치를 보정(`resolveAxis`)합니다.
 
+**[코드 스니펫: 안전 반경 기반 좀비 스폰 및 밤 웨이브 생성 (GameServer.cpp)]**
+```cpp
+constexpr float ZOMBIE_PLAYER_SAFE_RADIUS = 960.0f;
+constexpr float NIGHT_WAVE_MIN_SPAWN_DIST = 1100.0f;
+
+auto tooCloseToPlayerOrSpawn = [&](float x, float y, float radius) {
+    const float radius2 = radius * radius;
+    for (EntityID id : m_world.alive()) {
+        // 생존 플레이어 주변에는 일반 좀비를 즉시 생성하지 않음
+        auto* xf = m_world.tryGet<TransformComponent>(Entity{id});
+        if (!xf) continue;
+        float dx = xf->x - x;
+        float dy = xf->y - y;
+        if (dx * dx + dy * dy < radius2) return true;
+    }
+    for (const auto& ps : m_map.getPlayerSpawns()) {
+        // 라운드 초반 팀 스폰 지점 주변도 안전 반경으로 보호
+        float sx = TileMap::tileCentre(ps.x);
+        float sy = TileMap::tileCentre(ps.y);
+        float dx = sx - x;
+        float dy = sy - y;
+        if (dx * dx + dy * dy < radius2) return true;
+    }
+    return false;
+};
+
+// 밤 웨이브는 화면 밖 먼 거리에서 생성하되, 생성 직후 Frenzy 상태로 추격
+float dx = sx - txf->x;
+float dy = sy - txf->y;
+if (dx * dx + dy * dy < NIGHT_WAVE_MIN_SPAWN_DIST * NIGHT_WAVE_MIN_SPAWN_DIST) continue;
+ai.state = ZombieState::Frenzy;
+ai.targetX = txf->x;
+ai.targetY = txf->y;
+```
+> **구현 설명**: 일반 좀비 리스폰은 파밍 건물과 열린 타일을 후보로 삼되, 플레이어와 팀 스폰 지점 반경 960px 안에는 생성하지 않도록 필터링했습니다. 따라서 서버가 처음 생성되거나 라운드가 리셋될 때 플레이어가 바라보는 시작 지역에 좀비가 갑자기 튀어나오는 문제를 줄였습니다. 반면 밤 웨이브는 게임 플레이 압박을 유지하기 위해 1100px 이상 떨어진 화면 밖 후보만 허용하고, 생성 즉시 `Frenzy` 상태로 전환하여 멀리서 플레이어 방향으로 뛰어오도록 구성했습니다. 맵 경계에 의해 좌표가 클램핑되면서 다시 가까워지는 후보는 버려, "보이지 않는 곳에서 몰려오는 웨이브"라는 의도를 지켰습니다.
+
 > **[그림 5]** ZombieAI FSM 상태전이 다이어그램
 > *(최종 PDF 편집 단계에서 FSM 상태전이 다이어그램 삽입)*
 
@@ -303,6 +356,29 @@ void FireSystem::spreadBFS(World& world, TileMap& map) {
 }
 ```
 > **구현 설명**: 매 `FIRE_SPREAD_INTERVAL` 주기로 호출되며, 화염의 최전선(`m_frontier`)에서 상하좌우 인접 타일을 검사합니다. 가연성 타일(나무, 데브리)일 경우 `igniteTile`을 호출하여 불을 붙이고 `m_frontier`에 편입시킵니다. `checkBuildingContact`를 통해 건물이나 포탑에 닿으면 즉시 파괴되거나 폭발하도록 처리했습니다.
+
+**[코드 스니펫: 화염 타일 네트워크 동기화 및 바닥 렌더링]**
+```cpp
+// GameServer.cpp - 서버의 FireSystem 타일 목록을 전용 패킷으로 전송
+FireUpdatePacket firePkt{};
+const auto& fireTiles = m_fire.tiles();
+firePkt.tileCount = static_cast<uint8_t>(
+    std::min(fireTiles.size(), static_cast<size_t>(MAX_FIRE_UPDATE_TILES)));
+for (uint8_t i = 0; i < firePkt.tileCount; ++i) {
+    firePkt.tiles[i].tx = fireTiles[i].tx;
+    firePkt.tiles[i].ty = fireTiles[i].ty;
+}
+const size_t fireLen = 2 + static_cast<size_t>(firePkt.tileCount) * sizeof(FireTileRecord);
+for (uint32_t pi = 0; pi < MAX_CLIENTS; ++pi) {
+    if (m_net.isConnected(pi)) {
+        m_net.sendUnreliable(pi, &firePkt, fireLen);
+    }
+}
+
+// Game.cpp - 클라이언트가 받은 타일 좌표를 바닥 화염 그래픽으로 렌더링
+m_renderer.drawFire(m_net.fireTiles(), m_camera);
+```
+> **구현 설명**: 화염병 착탄 후 서버에는 실제 불 타일이 생성되지만, 이를 클라이언트에 보내지 않으면 데미지는 적용되어도 바닥 불 그래픽은 보이지 않습니다. 이를 해결하기 위해 `Packet.h`에 `FireUpdatePacket`과 `FireTileRecord`를 추가하고, 서버가 현재 `FireSystem::tiles()` 목록을 `CHAN_UNRELIABLE`로 전송하도록 했습니다. 클라이언트는 `NetworkClient`에서 타일 좌표 목록을 갱신한 뒤 `Renderer::drawFire()`를 호출하여 주황색 외곽과 노란색 중심부가 깜빡이는 바닥 화염을 그립니다. 라운드 재진입 시에는 기존 화염 목록을 비워 이전 라운드의 불이 남지 않도록 처리했습니다.
 
 > **[그림 6]** FireSystem BFS 화염 전파 원리
 > *(최종 PDF 편집 단계에서 BFS 화염 전파 원리 이미지 삽입)*
@@ -453,8 +529,9 @@ void BuildSystem::updateTurrets(World& world, float dt) {
                 float angleRad = bld.turretAngle * (PI / 180.0f);
                 float dirX =  std::sin(angleRad);
                 float dirY = -std::cos(angleRad);
-                float dot  = (dx * dirX + dy * dirY) / d; // 포탑 전방과 적 방향의 내적
+                float dot  = (dx * dirX + dy * dirY) / (d > 0.001f ? d : 0.001f);
                 float halfArc = bld.turretArcDeg * 0.5f * (PI / 180.0f);
+                dot = std::max(-1.0f, std::min(1.0f, dot));
                 if (std::acos(dot) > halfArc) continue; // 사격 호 밖이면 무시
             }
             nearDist = d; target = e;
@@ -491,7 +568,7 @@ if (st.channeling) {
 > **구현 설명**: 탈출존 내에서 F키를 눌러 채널링을 시작하면 `channelTimer`가 증가합니다. 이때 플레이어가 이동(4px 이상)하거나 대미지를 입으면 타이머가 초기화되어 긴장감을 유도하며, 5초(`EXTRACTION_CHANNEL_TIME`)를 채우면 성공 이벤트를 발생시킵니다.
 
 #### Alliance System (연합 및 배신)
-타 팀과 핸드셰이크 방식으로 연합을 맺거나 공격하여 배신할 수 있습니다.
+타 팀과 핸드셰이크 방식으로 연합을 맺고, 동맹 팀을 공격하면 배신으로 처리되어 연합이 해제됩니다.
 **[코드 스니펫: 연합 제안 및 핸드셰이크 (AllianceSystem.cpp)]**
 ```cpp
 bool AllianceSystem::proposeAlliance(uint8_t a, uint8_t b) {
@@ -507,7 +584,7 @@ bool AllianceSystem::proposeAlliance(uint8_t a, uint8_t b) {
     return false;
 }
 ```
-> **구현 설명**: A팀이 B팀에게 연합을 제안할 경우 `m_proposed` 배열에 상태를 기록합니다. B팀 역시 A팀에게 제안한 기록이 있다면 즉시 연합 상태(`setAlliance`)로 변경되고 양측 클라이언트에 브로드캐스트하여 동맹 여부를 HUD에 반영합니다.
+> **구현 설명**: A팀이 B팀에게 연합을 제안할 경우 `m_proposed` 배열에 상태를 기록합니다. B팀 역시 A팀에게 제안한 기록이 있다면 즉시 연합 상태(`setAlliance`)로 변경되고 양측 클라이언트에 브로드캐스트하여 동맹 여부를 HUD에 반영합니다. 연합 중인 팀을 공격하면 `handleBetrayal` 경로로 연합을 해제하여, 협력과 배신이 모두 가능한 PvP 긴장감을 만들었습니다.
 
 #### Database (MySQL 영구 저장 및 인증)
 플레이어의 계정 정보, 인벤토리, 스태시를 MySQL 서버에 저장합니다. 서버는 DB 연결 실패 시 기본적으로 로그인과 회원가입을 차단하며, 로컬 테스트가 필요한 경우에만 `DEADZONE_OFFLINE_AUTH=1` 환경변수로 계정 검증 우회를 명시적으로 켤 수 있습니다.
@@ -704,7 +781,7 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 }
 ```
 > **구현 설명**: SDL2의 기본 기능만으로는 복잡한 마스킹이 불가능하여, 렌더 타깃(Render Target) 텍스처를 활용했습니다. 안개 텍스처를 먼저 어둡게 칠한 다음, `SDL_RenderGeometry`로 플레이어의 조준 방향(120도)을 투명한 색(`alpha=0`)으로 뚫고, 외곽선에는 그라데이션을 적용하여 부드러운 시야 경계를 만들었습니다.
-- **파티클 시스템**: 총구 화염(Muzzle Flash), 탄피 배출, 피격 시 혈흔, 회복 이펙트 등 다양한 파티클 효과로 타격감을 살렸습니다.
+- **파티클 및 환경 이펙트**: 총구 화염(Muzzle Flash), 탄피 배출, 피격 시 혈흔, 회복 이펙트에 더해 서버에서 동기화된 화염 타일을 바닥 그래픽으로 렌더링하여 화염병의 착탄 지점과 전파 범위를 시각적으로 확인할 수 있게 했습니다.
 - **화면 연출**: 피격 시 히트 플래시(화면 붉어짐) 및 카메라 쉐이크를 적용했습니다.
 
 ### 5.3 UI / UX
@@ -730,8 +807,8 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 
 ### 6.2 구현 완료 주요 기능
 - ECS 기반 자체 서버 구조 구축 및 서버 권한 멀티플레이 연동 완료
-- 상태 기반 좀비 AI (시야 검사, 소음 반응, 장애물 우회) 구현
-- 동적 상호작용 시스템 (화염 전파, 건물/문 파괴, 포탑 건설, 탈출존 오픈)
+- 상태 기반 좀비 AI (시야 검사, 소음 반응, 장애물 우회, 안전 반경 기반 리스폰 및 밤 웨이브 원거리 추격) 구현
+- 동적 상호작용 시스템 (화염 전파, 화염 타일 네트워크 동기화/렌더링, 건물/문 파괴, 포탑 건설, 탈출존 오픈)
 - 인벤토리 기반 파밍, 장비 장착, 아이템 드랍, DB 연동 영속화 및 명시적 로컬 테스트 인증 우회 처리
 
 ### 6.3 미완성 사항 및 한계점

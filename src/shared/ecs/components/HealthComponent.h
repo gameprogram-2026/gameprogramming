@@ -10,10 +10,10 @@ namespace dz {
 // Team 0 = unaffiliated (zombies, neutral objects).
 // Teams 1-4 = player squads (2 players each, 4 teams max → 8 players total).
 //
-// Friendly-fire rule (enforced by DamageSystem on the server):
-//   Same team → damage is blocked (friendly fire disabled).
-//   Different teams → damage applies even when a temporary alliance is active
-//                     (alliance only suppresses *targeting* AI, not hit boxes).
+// Team damage rules are enforced by server combat/build systems:
+//   Same-team targeting is filtered by systems that explicitly own targeting
+//   decisions, while direct damage paths may still apply PvP damage.
+//   Temporary alliances suppress AI targeting, not physical hit boxes.
 // ─────────────────────────────────────────────────────────────────────────────
 enum class Team : uint8_t {
     Neutral = 0,

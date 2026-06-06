@@ -284,7 +284,7 @@ DamageResult CombatSystem::applyDamage(World& world, Entity victim, Entity attac
     res.victimID   = vnet ? vnet->netID : 0;
     res.attackerID = anet ? anet->netID : 0;
 
-    // Friendly-fire guard (within-team — now allowed for PvP!)
+    // Central damage intentionally allows PvP; targeting systems may apply their own filters.
     // if (ahp && ahp->team == vhp->team && ahp->team != Team::Neutral) {
     //     return res;
     // }
