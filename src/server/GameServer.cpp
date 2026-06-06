@@ -423,6 +423,7 @@ void GameServer::onClientAuth(uint32_t peerIdx, const char* username, const char
     ack.success = 1;
     std::strncpy(ack.message, "Login successful!", sizeof(ack.message));
     m_net.sendReliable(peerIdx, &ack, sizeof(ack));
+    m_net.setAuthenticated(peerIdx, true);
 
     m_peerUsernames[peerIdx] = username;
     
@@ -535,7 +536,10 @@ void GameServer::onStashTransferReq(uint32_t peerIdx, uint8_t srcType, uint8_t s
         } else {
             inv.recalculateGridStats();
             if (!m_peerUsernames[peerIdx].empty()) {
-                m_db.saveAccount(m_peerUsernames[peerIdx], inv);
+                if (!m_db.saveAccount(m_peerUsernames[peerIdx], inv)) {
+                    DZ_LOG_WARN("[Server] Failed to save lobby inventory for '%s'",
+                                m_peerUsernames[peerIdx].c_str());
+                }
             }
             sendInventorySyncToPeer(peerIdx);
             sendStashSyncToPeer(peerIdx);
@@ -702,7 +706,10 @@ void GameServer::onClientDisconnect(uint32_t peerIdx) {
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
                 if (!m_peerUsernames[peerIdx].empty()) {
-                    m_db.saveAccount(m_peerUsernames[peerIdx], *inv);
+                    if (!m_db.saveAccount(m_peerUsernames[peerIdx], *inv)) {
+                        DZ_LOG_WARN("[Server] Failed to save inventory on disconnect for '%s'",
+                                    m_peerUsernames[peerIdx].c_str());
+                    }
                 }
                 if (m_lobbyPlayers.find(peerIdx) != m_lobbyPlayers.end()) {
                     m_lobbyPlayers[peerIdx].inv = *inv;
@@ -861,7 +868,9 @@ void GameServer::onExtracted(Entity player, uint8_t zoneID) {
         const std::string& uname = m_peerUsernames[net->ownerID];
         if (!uname.empty()) {
             auto* inv = m_world.tryGet<InventoryComponent>(player);
-            if (inv) m_db.saveAccount(uname, *inv);
+            if (inv && !m_db.saveAccount(uname, *inv)) {
+                DZ_LOG_WARN("[Server] Failed to save extracted inventory for '%s'", uname.c_str());
+            }
             m_db.recordExtraction(uname);
         }
         // 로비 인벤토리 동기화 (다음 매치 진입 시 탈출한 템 유지)
@@ -912,10 +921,29 @@ void GameServer::onDeathLoot(Entity player) {
     inv->recalculateGridStats();
 
     auto* net = m_world.tryGet<NetworkComponent>(player);
-    if (net && m_lobbyPlayers.find(net->ownerID) != m_lobbyPlayers.end()) {
-        m_lobbyPlayers[net->ownerID].inv = *inv;
+    if (net) {
+        InventoryComponent deathSavedInv{};
+        if (auto it = m_lobbyPlayers.find(net->ownerID); it != m_lobbyPlayers.end()) {
+            deathSavedInv = it->second.inv;
+        } else {
+            deathSavedInv.money = inv->money;
+            deathSavedInv.stash = inv->stash;
+        }
+
+        deathSavedInv.slots.fill({});
+        deathSavedInv.equipped.fill({});
+        deathSavedInv.usedSlots = 0;
+        deathSavedInv.currentWeight = 0.0f;
+
+        if (auto it = m_lobbyPlayers.find(net->ownerID); it != m_lobbyPlayers.end()) {
+            it->second.inv = deathSavedInv;
+        }
+
         if (!m_peerUsernames[net->ownerID].empty()) {
-            m_db.saveAccount(m_peerUsernames[net->ownerID], *inv);
+            if (!m_db.saveAccount(m_peerUsernames[net->ownerID], deathSavedInv)) {
+                DZ_LOG_WARN("[Server] Failed to save death inventory for '%s'",
+                            m_peerUsernames[net->ownerID].c_str());
+            }
         }
         sendInventorySyncToPeer(net->ownerID);
         sendStashSyncToPeer(net->ownerID);
@@ -1973,6 +2001,8 @@ void GameServer::sendInventorySyncToPeer(uint32_t peerIdx) {
         Entity e{id};
         auto* net = m_world.tryGet<NetworkComponent>(e);
         if (net && net->role == NetRole::LocallyOwned && net->ownerID == peerIdx) {
+            auto* hp = m_world.tryGet<HealthComponent>(e);
+            if (!hp || !hp->isAlive) continue;
             auto* inv = m_world.tryGet<InventoryComponent>(e);
             if (inv) {
                 sendInv(*inv);

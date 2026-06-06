@@ -59,7 +59,7 @@ public:
     // ── In-game persistence ────────────────────────────────────────────────
     /// Save/replace the player's full inventory and money into the DB.
     /// Called on successful extraction or on server shutdown.
-    void saveAccount(const std::string& username,
+    bool saveAccount(const std::string& username,
                      const InventoryComponent& inv);
 
     // ── Player stats ───────────────────────────────────────────────────────

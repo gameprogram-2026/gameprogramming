@@ -19,6 +19,7 @@ struct PeerInfo {
     uint32_t  lastInputSeq= 0;
     InputPacket lastInput{};
     bool      connected   = false;
+    bool      authenticated = false;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +99,9 @@ public:
     bool isConnected(uint32_t idx) const { return m_peers[idx].connected; }
     void setPeerNetID(uint32_t peerIdx, uint32_t netID) {
         if (peerIdx < MAX_CLIENTS) m_peers[peerIdx].playerNetID = netID;
+    }
+    void setAuthenticated(uint32_t peerIdx, bool authenticated) {
+        if (peerIdx < MAX_CLIENTS) m_peers[peerIdx].authenticated = authenticated;
     }
 
 private:

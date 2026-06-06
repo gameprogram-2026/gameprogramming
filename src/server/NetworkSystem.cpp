@@ -238,6 +238,12 @@ void NetworkSystem::handlePacket(uint32_t peerIdx,
     if (len < 1) return;
     auto type = static_cast<PacketType>(data[0]);
 
+    if (type != PacketType::C2S_Auth && !m_peers[peerIdx].authenticated) {
+        DZ_LOG_WARN("[Net] Ignoring unauthenticated packet type 0x%02X from slot %u",
+                    static_cast<uint8_t>(type), peerIdx);
+        return;
+    }
+
     switch (type) {
     case PacketType::C2S_Input: {
         if (len < sizeof(InputPacket)) return;

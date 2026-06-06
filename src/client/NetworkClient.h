@@ -86,7 +86,7 @@ public:
 
     /// 비블로킹 연결 시작 — 매 프레임 pollConnect() 호출로 진행
     bool startConnect(const std::string& host, uint16_t port);
-    /// 비블로킹 연결 폴링 — ConnectAck 수신 시 true 반환
+    /// 비블로킹 연결 폴링 — AuthAck 성공 수신 시 true 반환
     bool pollConnect();
 
     // ── Client-side prediction ─────────────────────────────────────────────────

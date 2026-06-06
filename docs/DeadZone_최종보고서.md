@@ -59,14 +59,14 @@ DeadZone은 C++17과 SDL2, ENet, MySQL을 사용해 구현한 탑다운 좀비 �
 | 전투 | 총기 Hitscan Raycast, 근접 OBB 판정, 출혈/화염 지속 피해 | 투사체/피격/상태이상을 서버에서 판정하여 클라이언트 단독 조작을 억제 |
 | 월드 상호작용 | 화염 타일 전파, 문 파괴/수리, 건설, 포탑 | 맵 타일과 엔티티 시스템을 연결하여 플레이어 행동이 지형과 방어선에 영향 |
 | UI/UX | 인벤토리 드래그 앤 드롭, 미니맵 구역명, 건설 단축키 안내 | 테스트 플레이 중 필요한 정보가 화면에서 바로 식별되도록 구성 |
-| 영속화 | MySQL 계정, 인벤토리, 스태시 저장 | 라운드 밖 로비 인벤토리와 게임 내 획득물을 DB에 보존 |
+| 영속화 | MySQL 계정, 인벤토리, 스태시 저장 | 탈출 성공 시 보유 인벤토리를 보존하고, 사망 시 인벤토리/장착 아이템은 잃도록 처리 |
 
 ---
 
 ## 3장. 기술 아키텍처
 
 ### 3.1 전체 구조
-클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버가 게임 상태를 권한 있게 관리합니다. MySQL 데이터베이스가 설정된 환경에서는 계정, 인벤토리, 스태시를 영속 저장하고, DB 연결이 없으면 로그인과 회원가입을 차단합니다. 로컬 실행은 `scripts/setup_database.sh` 또는 `run_server.sh`의 자동 준비 과정을 통해 DB, 앱 계정, 테스트 로그인(`test` / `test1234`)을 먼저 생성한 뒤 진행합니다.
+클라이언트와 서버는 ENet(UDP 기반)을 통해 통신하며, 서버가 게임 상태를 권한 있게 관리합니다. MySQL 데이터베이스가 설정된 환경에서는 계정, 인벤토리, 스태시를 영속 저장하고, DB 연결이 없으면 로그인과 회원가입을 차단합니다. 로컬 실행은 `DeadZoneClient` 또는 `start_deadzone.command`가 `.env.server`를 확인하고, 없을 경우 `scripts/setup_database.sh`를 Terminal에서 실행해 DB, 앱 계정, 테스트 로그인(`test` / `Test1234!`)을 먼저 생성한 뒤 진행합니다.
 
 > **[그림 3]** Client ↔ ENet UDP ↔ Server ↔ MySQL 통신 흐름도
 > *(최종 PDF 편집 단계에서 통신 흐름도 삽입)*
@@ -601,10 +601,12 @@ if (st.channeling) {
 > **구현 설명**: 탈출존 내에서 F키를 눌러 채널링을 시작하면 `channelTimer`가 증가합니다. 이때 플레이어가 이동(4px 이상)하거나 대미지를 입으면 타이머가 초기화되어 긴장감을 유도하며, 5초(`EXTRACTION_CHANNEL_TIME`)를 채우면 성공 이벤트를 발생시킵니다.
 
 #### Database (MySQL 영구 저장 및 인증)
-플레이어의 계정 정보, 인벤토리, 스태시를 MySQL 서버에 저장합니다. 서버는 DB 연결 실패 시 로그인과 회원가입을 차단하며, 로컬 테스트도 `scripts/setup_database.sh`로 MySQL DB와 테스트 계정을 생성한 뒤 실제 DB 인증 경로를 사용합니다. 기본 테스트 로그인은 `test` / `test1234`입니다.
+플레이어의 계정 정보, 인벤토리, 스태시를 MySQL 서버에 저장합니다. 서버는 DB 연결 실패 시 로그인과 회원가입을 차단하며, 로컬 테스트도 `DeadZoneClient` 실행 중 자동으로 열리는 DB 설정 Terminal 또는 `scripts/setup_database.sh`로 MySQL DB와 테스트 계정을 생성한 뒤 실제 DB 인증 경로를 사용합니다. 기본 테스트 로그인은 `test` / `Test1234!`입니다.
 **[코드 스니펫: 트랜잭션 기반 인벤토리 DB 저장 (Database.cpp)]**
 ```cpp
-void Database::saveAccount(const std::string& username, const InventoryComponent& inv) {
+bool Database::saveAccount(const std::string& username, const InventoryComponent& inv) {
+    if (!m_conn) return false;
+
     // 1. 트랜잭션(Transaction) 시작 - 중간에 실패하면 자동 롤백
     struct Transaction {
         MYSQL* conn; bool committed = false;
@@ -632,9 +634,13 @@ void Database::saveAccount(const std::string& username, const InventoryComponent
         query(std::string(buf));
     }
     txn.commit(); // 모든 쿼리가 정상 실행되면 DB에 반영
+    return true;
 }
 ```
-> **구현 설명**: 유저가 게임을 종료하거나 탈출에 성공할 때 인벤토리를 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 쿼리가 실패하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 인벤토리 손실을 방지합니다. 실제 저장 코드는 `is_equipped=0`을 그리드, `1`을 장비 슬롯, `2`를 로비 스태시로 구분해 같은 `inventory` 테이블에 저장합니다. DB 연결이 실패한 경우에는 인증 단계에서 접속을 차단하므로, 발표용 서버에서는 MySQL 접속 설정을 먼저 검증해야 합니다.
+> **구현 설명**: 로비에서 스태시와 인벤토리를 옮길 때, 탈출에 성공할 때, 사망 후 인벤토리 손실을 반영할 때 DB에 기록합니다. 아이템 복사나 손실을 막기 위해 **트랜잭션(Transaction)** 객체를 활용했습니다. 기존 데이터를 삭제하고 새 아이템들을 Insert 하는 과정 중 쿼리가 실패하면, 소멸자(`~Transaction`)에서 `ROLLBACK`을 호출하여 중간 상태 저장을 방지합니다. 실제 저장 코드는 `is_equipped=0`을 그리드, `1`을 장비 슬롯, `2`를 로비 스태시로 구분해 같은 `inventory` 테이블에 저장합니다. DB 연결이 실패한 경우에는 인증 단계에서 접속을 차단하므로, 발표용 서버에서는 MySQL 접속 설정을 먼저 검증해야 합니다.
+
+#### 사망/탈출 아이템 보존 규칙
+아이템 보존은 서버가 명확히 구분합니다. 탈출 성공 시에는 현재 인벤토리, 장착 아이템, 스태시 상태를 DB에 저장하여 다음 로비에서 그대로 이어집니다. 반대로 사망 시에는 플레이어가 들고 있던 그리드 인벤토리와 장착 무기를 월드 루트로 드랍하고, DB에는 빈 그리드/빈 장비 슬롯과 기존 로비 스태시만 저장합니다. 따라서 스태시는 로비 보관함 역할만 하며, 사망한 플레이어의 소지품이 자동으로 스태시에 들어가지 않습니다.
 
 ### 4.4 플레이어 이동 처리 및 넉백 물리 (MovementSystem)
 클라이언트로부터 받은 입력 패킷을 서버에서 물리적으로 시뮬레이션하는 핵심 시스템입니다.
@@ -816,23 +822,24 @@ void Renderer::drawFOV(float wx, float wy, float aimAngleDeg, const Camera& cam,
 - **OS 및 개발 환경**: macOS, C++17
 - **주요 라이브러리**: CMake, SDL2 (image, mixer, ttf), ENet, cJSON, MySQL (Connector)
 - **빌드 방식**: CMake 빌드 도구를 활용 (`cmake --build build`)
-- **가장 쉬운 실행 방식**: macOS Finder에서 `start_deadzone.command`를 더블클릭하면 DB 준비 후 서버와 클라이언트를 함께 실행합니다. 최초 1회 실행 시 MySQL 관리자 비밀번호를 묻는 경우가 있으며, 입력에 성공하면 `deadzone` DB, `deadzone_user` 앱 계정, 기본 테스트 로그인(`test` / `test1234`)을 자동 생성합니다.
-- **터미널 실행 방식**: `./run_game.sh`로 서버와 클라이언트를 함께 실행하거나, `build/bin/DeadZoneServer`와 `build/bin/DeadZoneClient`를 각각 실행합니다. 클라이언트는 실행 파일 위치를 기준으로 `assets/`, `data/`를 읽도록 구성했습니다.
-- **DB 설정**: `scripts/setup_database.sh`를 실행하면 로컬 MySQL에 `deadzone` DB, `deadzone_user` 계정, 기본 테스트 로그인(`test` / `test1234`)을 만들고 `.env.server`를 작성합니다. `run_game.sh`와 `run_server.sh`는 `.env.server`가 없을 때 이 준비 과정을 먼저 실행합니다. 직접 설정할 경우 환경변수(`DEADZONE_DB_HOST`, `DEADZONE_DB_USER`, `DEADZONE_DB_PASS`, `DEADZONE_DB_NAME`)를 사용합니다.
+- **가장 쉬운 실행 방식**: macOS Finder에서 `build/bin/DeadZoneClient`를 실행합니다. `.env.server`가 없으면 클라이언트가 자동으로 Terminal을 열어 DB 설정 스크립트를 실행하고, 설정 완료 후 서버를 자동 실행합니다. 기존 방식처럼 `start_deadzone.command`를 더블클릭해도 DB 준비 후 서버와 클라이언트를 함께 실행할 수 있습니다.
+- **터미널 실행 방식**: `./run_game.sh`로 서버와 클라이언트를 함께 실행하거나, `build/bin/DeadZoneClient`를 실행합니다. 클라이언트는 실행 파일 위치를 기준으로 `assets/`, `data/`를 읽고, 로컬 서버가 없으면 `DeadZoneServer`를 자동 실행합니다.
+- **DB 설정**: `scripts/setup_database.sh`를 실행하면 로컬 MySQL에 `deadzone` DB, `deadzone_user` 계정, 기본 테스트 로그인(`test` / `Test1234!`)을 만들고 `.env.server`를 작성합니다. MySQL 비밀번호 정책을 고려해 기본 앱 DB 비밀번호는 `Deadzone1234!`를 사용합니다. 직접 설정할 경우 환경변수(`DEADZONE_DB_HOST`, `DEADZONE_DB_USER`, `DEADZONE_DB_PASS`, `DEADZONE_DB_NAME`)를 사용합니다.
 
 #### 교수님 테스트용 실행 절차
 1. MySQL이 설치되어 있지 않다면 먼저 설치 및 실행합니다. macOS Homebrew 환경에서는 `brew install mysql && brew services start mysql`을 사용할 수 있습니다.
-2. 프로젝트 폴더의 `start_deadzone.command`를 더블클릭합니다. 실행 파일이 없으면 CMake 빌드를 먼저 수행한 뒤 DB 설정과 게임 실행으로 이어집니다.
-3. 최초 실행에서 MySQL 관리자 비밀번호를 요구하면 로컬 MySQL `root` 비밀번호를 입력합니다.
-4. 비밀번호 입력 후 자동으로 테스트 계정이 생성됩니다. 로그인 화면에서 아이디 `test`, 비밀번호 `test1234`를 입력합니다.
-5. MySQL 관리자 비밀번호를 모르는 경우에는 터미널에서 `MYSQL_ADMIN_USER`, `MYSQL_ADMIN_PASS`를 명시해 실행할 수 있습니다.
+2. 프로젝트 폴더의 `build/bin/DeadZoneClient`를 실행합니다. 실행 파일이 없으면 먼저 `start_deadzone.command`를 더블클릭해 빌드를 수행합니다.
+3. 최초 실행에서 `.env.server`가 없으면 클라이언트가 Terminal을 열고 DB 설정 스크립트를 실행합니다.
+4. Terminal에서 MySQL 관리자 비밀번호를 요구하면 로컬 MySQL `root` 비밀번호를 입력합니다. 설정이 성공하면 `deadzone` DB, `deadzone_user` 앱 계정, 테스트 계정이 생성되고 `.env.server`가 작성됩니다.
+5. 게임 로그인 화면에서 아이디 `test`, 비밀번호 `Test1234!`를 입력합니다.
+6. MySQL 관리자 비밀번호를 모르는 경우에는 터미널에서 `MYSQL_ADMIN_USER`, `MYSQL_ADMIN_PASS`를 명시해 실행할 수 있습니다.
 
 ```bash
 MYSQL_ADMIN_USER=root MYSQL_ADMIN_PASS='root비밀번호' ./scripts/setup_database.sh
 ./run_game.sh
 ```
 
-6. `Access denied for user 'root'@'localhost'`가 표시되거나 비밀번호를 알 수 없는 환경에서는 MySQL에서 DB 생성 권한이 있는 계정 정보를 확인한 뒤 아래처럼 실행합니다.
+7. `Access denied for user 'root'@'localhost'`가 표시되거나 비밀번호를 알 수 없는 환경에서는 MySQL에서 DB 생성 권한이 있는 계정 정보를 확인한 뒤 아래처럼 실행합니다.
 
 ```bash
 MYSQL_ADMIN_USER='관리자계정' MYSQL_ADMIN_PASS='관리자비밀번호' ./scripts/setup_database.sh
@@ -847,12 +854,12 @@ MYSQL_ADMIN_USER='관리자계정' MYSQL_ADMIN_PASS='관리자비밀번호' ./sc
 | 전투 | 총기 사격, 근접 공격, 출혈, 화염 피해 | Hitscan Raycast, OBB 근접 판정, 서버 권한 `applyDamage` |
 | 건설/방어 | 바리케이드, 포탑, 제작대, 문 수리/파괴 | 타일 점유, 재료 검증, 포탑 사격 호 내적 판정 |
 | 화염 시스템 | 화염병 전파, 화염방사기 비전파 바닥 화염, 클라이언트 그래픽 동기화 | BFS 전파, FireUpdatePacket, 타일 단위 데미지 |
-| 인벤토리/DB | 로비 스태시, 장비 장착, 아이템 이동/드랍, 계정 저장 | MySQL 트랜잭션 저장, 테스트 계정 자동 생성 |
-| 실행 편의성 | 더블클릭 실행 파일, DB 자동 준비 스크립트, 테스트 계정 안내 | `start_deadzone.command`, `setup_database.sh`, `.env.server` |
+| 인벤토리/DB | 로비 스태시, 장비 장착, 아이템 이동/드랍, 사망 시 소지품 손실, 탈출 시 보존 | MySQL 트랜잭션 저장, 테스트 계정 자동 생성 |
+| 실행 편의성 | 클라이언트 단독 실행, DB 자동 준비 Terminal, 테스트 계정 안내 | `DeadZoneClient`, `start_deadzone.command`, `setup_database.sh`, `.env.server` |
 
 ### 6.3 미완성 사항 및 한계점
 - 좀비 개체 수가 맵 전역에 다수 스폰될 시, 충돌 처리나 탐색에서 전체 엔티티 순회가 발생하여 O(N²) 성능 병목 우려가 존재합니다. 향후 QuadTree 등 공간 분할 최적화가 요구됩니다.
-- DB 미설정 환경에서는 로그인이 차단됩니다. 발표나 테스트 전에는 `scripts/setup_database.sh`로 MySQL 접속 설정과 테스트 계정 생성을 먼저 검증해야 합니다.
+- DB 미설정 환경에서는 로그인이 차단됩니다. `DeadZoneClient`가 `.env.server`를 찾지 못하면 Terminal을 열어 DB 설정을 유도하지만, MySQL 관리자 비밀번호는 테스트 환경의 로컬 설정에 맞게 입력해야 합니다.
 - `data/sounds.json`에는 세분화된 사운드 키가 정의되어 있으나, 현재 실제 런타임에서 사용하는 기본 효과음 위주로 파일이 존재합니다. 발표 빌드에서는 누락 사운드 로그가 발생하지 않도록 키-파일 매칭 정리가 필요합니다.
 - `smg_9mm` 전용 아이콘은 별도 PNG 에셋으로 추가했습니다. 남은 에셋 보강 항목은 세분화된 사운드 파일 매칭입니다.
 

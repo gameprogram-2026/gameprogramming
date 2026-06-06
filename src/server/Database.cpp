@@ -285,8 +285,12 @@ bool Database::loginAccount(const std::string& username,
 
     outInv.slots.fill({});
     outInv.equipped.fill({});
+    outInv.stash.fill({});
     outInv.usedSlots      = 0;
     outInv.currentWeight  = 0.0f;
+
+    int equipRows = 0;
+    int stashRows = 0;
 
     MYSQL_ROW irow;
     while ((irow = mysql_fetch_row(invRes)) != nullptr) {
@@ -301,11 +305,15 @@ bool Database::loginAccount(const std::string& username,
         item.weight   = irow[6] ? std::stof(irow[6]) : 0.0f;
 
         if (locType == 1) {
-            if (slotIdx >= 0 && slotIdx < EQUIPMENT_SLOT_COUNT)
+            if (slotIdx >= 0 && slotIdx < EQUIPMENT_SLOT_COUNT) {
                 outInv.equipped[slotIdx] = item;
+                if (item.isValid()) ++equipRows;
+            }
         } else if (locType == 2) {
-            if (slotIdx >= 0 && slotIdx < 40)
+            if (slotIdx >= 0 && slotIdx < 40) {
                 outInv.stash[slotIdx] = item;
+                if (item.isValid()) ++stashRows;
+            }
         } else {
             if (slotIdx >= 0 && slotIdx < INVENTORY_GRID_SLOTS) {
                 outInv.slots[slotIdx] = item;
@@ -318,18 +326,21 @@ bool Database::loginAccount(const std::string& username,
     }
     mysql_free_result(invRes);
 
-    DZ_LOG_INFO("[DB] Login OK: %s (money=%d, slots=%d)",
-                username.c_str(), outInv.money, outInv.usedSlots);
+    DZ_LOG_INFO("[DB] Login OK: %s (money=%d, grid=%d, equipped=%d, stash=%d)",
+                username.c_str(), outInv.money, outInv.usedSlots, equipRows, stashRows);
     return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // saveAccount — transactional upsert
 // ─────────────────────────────────────────────────────────────────────────────
-void Database::saveAccount(const std::string& username,
+bool Database::saveAccount(const std::string& username,
                            const InventoryComponent& inv)
 {
-    if (!m_conn) return;
+    if (!m_conn) {
+        DZ_LOG_WARN("[DB] saveAccount skipped for '%s' because DB is not connected.", username.c_str());
+        return false;
+    }
 
     std::vector<char> escUser(username.size() * 2 + 1);
     mysql_real_escape_string(m_conn, escUser.data(), username.c_str(),
@@ -353,14 +364,18 @@ void Database::saveAccount(const std::string& username,
     std::snprintf(moneyBuf, sizeof(moneyBuf),
                   "UPDATE accounts SET money=%d WHERE username='%s'",
                   inv.money, escUser.data());
-    if (!query(std::string(moneyBuf))) return;
+    if (!query(std::string(moneyBuf))) return false;
 
     // Wipe existing inventory rows for this player
     {
         std::string delSql = std::string("DELETE FROM inventory WHERE username='")
                            + escUser.data() + "'";
-        if (!query(delSql)) return;
+        if (!query(delSql)) return false;
     }
+
+    int gridRows = 0;
+    int equipRows = 0;
+    int stashRows = 0;
 
     // Insert grid slots
     for (int i = 0; i < INVENTORY_GRID_SLOTS; ++i) {
@@ -379,7 +394,8 @@ void Database::saveAccount(const std::string& username,
             escUser.data(), i, item.itemID, escKey.data(),
             static_cast<int>(item.category), item.quantity, item.weight);
 
-        if (!query(std::string(buf))) return;
+        if (!query(std::string(buf))) return false;
+        ++gridRows;
     }
 
     // Insert equipped slots
@@ -399,7 +415,8 @@ void Database::saveAccount(const std::string& username,
             escUser.data(), i, item.itemID, escKey.data(),
             static_cast<int>(item.category), item.quantity, item.weight);
 
-        if (!query(std::string(buf))) return;
+        if (!query(std::string(buf))) return false;
+        ++equipRows;
     }
 
     // Insert stash slots
@@ -419,11 +436,14 @@ void Database::saveAccount(const std::string& username,
             escUser.data(), i, item.itemID, escKey.data(),
             static_cast<int>(item.category), item.quantity, item.weight);
 
-        if (!query(std::string(buf))) return;
+        if (!query(std::string(buf))) return false;
+        ++stashRows;
     }
 
     txn.commit();
-    DZ_LOG_INFO("[DB] Saved inventory for '%s'", username.c_str());
+    DZ_LOG_INFO("[DB] Saved inventory for '%s' (grid=%d, equipped=%d, stash=%d)",
+                username.c_str(), gridRows, equipRows, stashRows);
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

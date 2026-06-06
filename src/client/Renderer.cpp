@@ -2242,30 +2242,19 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
 
     // ══════════════════════════════════════════════════════════════
-    // 상단 낮/밤 시계 UI (Day X - Time)
+    // 상단 낮/밤 시계 UI (실제 라운드 경과 시간 + 현재 페이즈)
     // ══════════════════════════════════════════════════════════════
     {
         float timeOfDay = std::fmod(gameTime, 180.0f);
-        int currentDay = static_cast<int>(gameTime / 180.0f) + 1;
         bool isNight = timeOfDay > 120.0f;
 
-        // 시간 포맷 (0~180초를 06:00 ~ 익일 06:00 로 변환)
-        // 낮(120초) = 12시간 (06:00 ~ 18:00), 밤(60초) = 12시간 (18:00 ~ 06:00)
-        int hours, minutes;
-        if (!isNight) {
-            float dayT = timeOfDay / 120.0f;
-            float timeH = 6.0f + dayT * 12.0f;
-            hours = static_cast<int>(timeH);
-            minutes = static_cast<int>((timeH - hours) * 60.0f);
-        } else {
-            float nightT = (timeOfDay - 120.0f) / 60.0f;
-            float timeH = 18.0f + nightT * 12.0f;
-            hours = static_cast<int>(timeH) % 24;
-            minutes = static_cast<int>((timeH - static_cast<int>(timeH)) * 60.0f);
-        }
+        int elapsed = static_cast<int>(std::max(0.0f, gameTime));
+        int minutes = elapsed / 60;
+        int seconds = elapsed % 60;
         
         char clockStr[64];
-        std::snprintf(clockStr, sizeof(clockStr), "DAY %d - %02d:%02d", currentDay, hours, minutes);
+        std::snprintf(clockStr, sizeof(clockStr), "%s  %02d:%02d",
+                      isNight ? "NIGHT" : "DAY", minutes, seconds);
 
         SDL_Color clockCol = isNight ? SDL_Color{220, 60, 60, 255} : SDL_Color{220, 220, 220, 255};
         
@@ -2289,7 +2278,7 @@ void Renderer::drawHUD(float hp, float maxHp, float stamina, float maxStamina, b
                 drawTextShadow("NIGHT WAVE STARTED!", m_screenW / 2, m_screenH / 4, {255, 30, 30, a}, {0,0,0,a}, fLg, true);
             }
         } else {
-            if (timeOfDay < 5.0f && currentDay > 1) {
+            if (timeOfDay < 5.0f && gameTime >= 180.0f) {
                 uint8_t a = static_cast<uint8_t>(std::max(0.0f, (1.0f - timeOfDay / 5.0f)) * 255);
                 drawTextShadow("SURVIVED THE NIGHT", m_screenW / 2, m_screenH / 4, {60, 255, 60, a}, {0,0,0,a}, fLg, true);
             }

@@ -17,6 +17,6 @@ set +a
 python3 "$ROOT_DIR/src/generate_map.py"
 
 echo "DB: ${DEADZONE_DB_USER}@${DEADZONE_DB_HOST}/${DEADZONE_DB_NAME}"
-echo "Test login: ${DEADZONE_TEST_USER:-test} / ${DEADZONE_TEST_PASS:-test1234}"
+echo "Test login: ${DEADZONE_TEST_USER:-test} / ${DEADZONE_TEST_PASS:-Test1234!}"
 
 exec "$ROOT_DIR/build/bin/DeadZoneServer" "$@"

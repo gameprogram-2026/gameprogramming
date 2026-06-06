@@ -120,7 +120,7 @@ bool NetworkClient::startConnect(const std::string& host, uint16_t port) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// pollConnect — 매 프레임 호출. ConnectAck 수신 완료 시 true 반환
+// pollConnect — 매 프레임 호출. AuthAck 성공 수신 완료 시 true 반환
 // ─────────────────────────────────────────────────────────────────────────────
 bool NetworkClient::pollConnect() {
     if (!m_host) return false;
@@ -187,7 +187,6 @@ bool NetworkClient::pollConnect() {
                     m_fireTiles.clear();
                     m_predCount    = 0;
                     m_predHead     = 0;
-                    done = true;
                     DZ_LOG_INFO("[Client] ConnectAck (async): netID=%u spawn=(%.0f,%.0f) team=%u",
                                 m_localNetID, m_localX, m_localY, m_localTeam);
                 }
